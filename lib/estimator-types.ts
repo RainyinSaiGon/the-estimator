@@ -1,0 +1,13 @@
+export const categories = ["discovery", "authentication", "mapping", "import", "sync", "deduplication", "testing", "handover"] as const;
+export type Category = typeof categories[number];
+export type Answers = { direction: "unknown" | "one-way" | "two-way"; api: "unknown" | "documented" | "custom"; quality: "unknown" | "clean" | "mixed"; volume: "unknown" | "small" | "medium" | "large"; mapping: "unknown" | "standard" | "custom" };
+export type Requirement = { id: Category; title: string; evidence: string };
+export type Scope = { summary: string; requirements: Requirement[]; initialAnswers: Answers; risks: string[]; parser: "openai" | "demo"; model?: string };
+export type Task = { category: Category; label: string; base: number; factor: number; hours: number; low: number; high: number; observations: number };
+export type History = { id: string; name: string; synthetic: boolean; features: Answers; base: Partial<Record<Category, number>>; actual: Partial<Record<Category, number>> };
+export type Estimate = { tasks: Task[]; low: number; high: number; hours: number; baseHours: number; blockers: string[]; assumptions: string[]; references: { id: string; name: string; synthetic: boolean; hours: number; score: number }[] };
+export type Snapshot = { id: string; revision: number; at: string; estimate: Estimate; answers: Answers; excluded: Category[]; notes: string };
+export type Actuals = { hours: Partial<Record<Category, number>>; additionalHours: number; explanation: string; synthetic: boolean; at: string };
+export type Project = { id: string; title: string; brief: string; scope: Scope; answers: Answers; excluded: Category[]; notes: string; versions: Snapshot[]; actuals: Actuals | null; createdAt: string; updatedAt: string };
+export type ProjectView = Project & { estimate: Estimate };
+export type Workspace = { projects: ProjectView[]; history: History[]; aiReady: boolean; user: string; selectedId?: string };
