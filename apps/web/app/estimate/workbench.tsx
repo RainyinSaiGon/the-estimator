@@ -1,8 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { signOut } from "next-auth/react";
 import { useCallback, useEffect, useState } from "react";
+import type { IdentityAccount } from "../../lib/identity";
 
 const sampleBrief = `Hi team,
 
@@ -54,7 +54,7 @@ type PrivateRecordSnapshot = {
   estimate: Estimate;
   deliveryOutcome: null;
 };
-type PrivateRecordStatus = { oidcConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
+type PrivateRecordStatus = { identityConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
 
 const supportedFiles = ".pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,.eml";
 
@@ -83,7 +83,7 @@ async function fileContentBase64(file: File) {
   return btoa(chunks.join(""));
 }
 
-export default function EstimateWorkbench() {
+export default function EstimateWorkbench({ identityEnabled = false, account = null }: { identityEnabled?: boolean; account?: IdentityAccount | null }) {
   const [brief, setBrief] = useState(sampleBrief);
   const [file, setFile] = useState<File | null>(null);
   const [parser, setParser] = useState<Parser>("ai");
@@ -102,6 +102,12 @@ export default function EstimateWorkbench() {
   const [recordAction, setRecordAction] = useState<string | null>(null);
   const [originalFileDownload, setOriginalFileDownload] = useState<{ name: string; url: string } | null>(null);
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
+
+  async function signOut() {
+    const response = await fetch("/api/auth/logout", { method: "POST" });
+    if (response.ok) window.location.assign("/");
+    else setRecordsMessage("Sign out could not be completed. Please try again.");
+  }
 
   function clearReview() {
     setScope(null);
@@ -134,7 +140,7 @@ export default function EstimateWorkbench() {
       setRecordsSignedIn(true);
       setRecordsMessage("");
     } catch {
-      setRecordStatus((current) => current ?? { oidcConfigured: false, recordsEnabled: false, retentionDays: 90, message: "Private storage could not be reached." });
+      setRecordStatus((current) => current ?? { identityConfigured: false, recordsEnabled: false, retentionDays: 90, message: "Private storage could not be reached." });
       setRecordsMessage("Saved estimates could not be loaded. Try again in a moment.");
     }
   }, []);
@@ -326,7 +332,7 @@ export default function EstimateWorkbench() {
   return <main className="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-10">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · private saving optional</span>
+      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · not saved</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
     </header>
 
     <div className="grid gap-8 py-8 lg:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)] lg:gap-10">
@@ -431,7 +437,7 @@ export default function EstimateWorkbench() {
             <p className="mt-5 text-xs leading-5 text-[var(--muted)]">{scope.estimateMode === "general" ? "General-work bands are uncalibrated planning priors." : "Demonstration references are fictional."} This is a planning aid, not a delivery commitment. Nothing is stored unless you explicitly save it to a configured private workspace.</p>
             <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5">
               <div className="flex flex-wrap items-start justify-between gap-4"><div><h4 className="text-sm font-semibold">Save a reviewed estimate privately</h4><p className="mt-1 max-w-xl text-xs leading-5 text-[var(--muted)]">Your original suggestion, reviewed scope, source, and confirmed estimate are encrypted before storage. Saving creates a new immutable snapshot; it never overwrites an earlier one. Records expire after {recordStatus?.retentionDays ?? 90} days.</p></div><span className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">Explicit save</span></div>
-              {recordStatus?.recordsEnabled ? recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-white p-4"><p className="text-sm text-[var(--muted)]">Sign in with your organization account to save or open private estimates.</p><a href="/api/auth/signin/oidc?callbackUrl=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</a></div> : <div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Estimate name<input aria-label="Private estimate name" value={recordTitle} maxLength={200} onChange={(event) => setRecordTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={savePrivateEstimate} disabled={busy !== null || !recordTitle.trim() || !suggestedScope} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">{busy === "save" ? "Saving privately…" : "Save private estimate"}</button></div> : <p className="mt-4 rounded-xl border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--muted)]">{recordStatus?.message ?? "Checking private storage configuration…"} This preview remains ephemeral until OIDC login and encrypted storage are configured.</p>}
+              {recordStatus?.recordsEnabled ? recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-white p-4"><p className="text-sm text-[var(--muted)]">Sign in to save or open estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : <div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Estimate name<input aria-label="Private estimate name" value={recordTitle} maxLength={200} onChange={(event) => setRecordTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={savePrivateEstimate} disabled={busy !== null || !recordTitle.trim() || !suggestedScope} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">{busy === "save" ? "Saving privately…" : "Save private estimate"}</button></div> : <p className="mt-4 rounded-xl border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--muted)]">{recordStatus?.message ?? "Checking private storage configuration…"} This preview remains ephemeral until first-party identity and encrypted storage are configured.</p>}
               {recordsMessage && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
             </div>
           </section>}
@@ -440,8 +446,8 @@ export default function EstimateWorkbench() {
     </div>
 
     <section className="border-t border-[var(--line)] py-8">
-      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut({ callbackUrl: "/estimate" })} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
-      {!recordStatus?.recordsEnabled ? <p className="mt-3 text-sm text-[var(--muted)]">{recordStatus?.message ?? "Checking configuration…"}</p> : recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] p-5"><p className="text-sm text-[var(--muted)]">Sign in to view estimates in your private workspace.</p><a href="/api/auth/signin/oidc?callbackUrl=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</a></div> : savedRecords.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{recordsSignedIn === true ? "No saved estimates yet." : "Sign in after private storage is configured to access saved estimates."}</p> : <ul className="mt-4 grid gap-3 md:grid-cols-2">{savedRecords.map((record) => <li key={record.id} className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] p-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{record.title}</p><p className="mt-1 text-xs text-[var(--muted)]">Saved {new Date(record.createdAt).toLocaleDateString()} · expires {new Date(record.expiresAt).toLocaleDateString()}</p></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => openPrivateRecord(record.id)} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-medium disabled:opacity-50">{recordAction === record.id ? "Opening…" : "Open"}</button><button type="button" onClick={() => deletePrivateRecord(record.id)} disabled={recordAction !== null} aria-label={`Delete ${record.title}`} className="rounded-full px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">Delete</button></div></li>)}</ul>}
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut()} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
+      {!recordStatus?.recordsEnabled ? <p className="mt-3 text-sm text-[var(--muted)]">{recordStatus?.message ?? "Checking configuration…"}</p> : recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] p-5"><p className="text-sm text-[var(--muted)]">Sign in to view estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : savedRecords.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{recordsSignedIn === true ? "No saved estimates yet." : "Sign in after private storage is configured to access saved estimates."}</p> : <ul className="mt-4 grid gap-3 md:grid-cols-2">{savedRecords.map((record) => <li key={record.id} className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] p-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{record.title}</p><p className="mt-1 text-xs text-[var(--muted)]">Saved {new Date(record.createdAt).toLocaleDateString()} · expires {new Date(record.expiresAt).toLocaleDateString()}</p></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => openPrivateRecord(record.id)} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-medium disabled:opacity-50">{recordAction === record.id ? "Opening…" : "Open"}</button><button type="button" onClick={() => deletePrivateRecord(record.id)} disabled={recordAction !== null} aria-label={`Delete ${record.title}`} className="rounded-full px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">Delete</button></div></li>)}</ul>}
       {recordsMessage && !estimate && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
     </section>
   </main>;

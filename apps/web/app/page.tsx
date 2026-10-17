@@ -1,10 +1,15 @@
 import Link from "next/link";
+import { accountForSession, identityAuthConfigured } from "../lib/identity";
 
-export default function HomePage() {
+export const dynamic = "force-dynamic";
+
+export default async function HomePage() {
+  const identityEnabled = identityAuthConfigured();
+  const session = identityEnabled ? await accountForSession() : null;
   return <main className="mx-auto min-h-screen max-w-6xl px-6 py-7 md:px-12">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <span className="text-xs uppercase tracking-[.18em] text-[var(--muted)]">Integration delivery</span>
+      <div className="flex items-center gap-5"><span className="hidden text-xs uppercase tracking-[.18em] text-[var(--muted)] sm:inline">Integration delivery</span>{identityEnabled && (session ? <Link href="/account" className="text-sm underline underline-offset-4">{session.account.displayName}</Link> : <Link href="/sign-in" className="rounded-full border border-[var(--line)] px-4 py-2 text-sm">Sign in</Link>)}</div>
     </header>
     <section className="grid min-h-[76vh] items-center gap-12 py-16 md:grid-cols-[1.15fr_.85fr]">
       <div>
