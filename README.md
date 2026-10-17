@@ -12,6 +12,10 @@ Client brief → source-grounded scope → clarifying questions → task estimat
 - Actual original-scope hours, separate additions and a preview of the next comparable estimate.
 - Persistent user-scoped D1 storage, stale-update detection and authenticated mutations.
 - Markdown estimate export and JSON workspace export.
+- Questions ranked by baseline blockers and deterministic effort sensitivity, with source context and a copyable client clarification pack.
+- Recorded-only or demonstration history policies, reference-match explanations, and every contributing task observation.
+- Frozen base/adjusted prediction errors, bias, and descriptive range coverage in separate recorded and synthetic cohorts.
+- Baseline-to-baseline/draft comparisons, replacement reasons, and exports for a selected saved version.
 
 Eight initial historical projects are **synthetic demonstration examples**. The illustrative-hours button marks its output as synthetic too. A changed estimate demonstrates the learning mechanism; predictive accuracy improvement has not been established.
 
@@ -62,10 +66,14 @@ Historical matches use weighted feature similarity of at least 0.45. Each task u
 - `lib/evidence.ts`: source-passage matching.
 - `lib/estimator.ts`: deterministic estimation and calibration.
 - `lib/estimator-data.ts`: task assumptions and labelled fictional reference projects.
+- `lib/clarifications.ts`: source support, question ordering, option sensitivity and client question packs.
+- `lib/learning.ts`: prediction-error summaries from frozen baselines and original-scope actuals.
+- `lib/baselines.ts`: stored-version comparison and escaped Markdown exports.
+- `lib/project-record.ts`: version-2 live-field defaults without rewriting legacy snapshots.
 - `db/schema.ts` and `drizzle/`: D1 schema and migrations.
 - `docs/mvp-spec.md`: scope, assumptions, acceptance criteria and remaining decisions.
 
 ## Submission status
-The official event page read on 14 October 2026 gives a deadline of **18 October 2026, 23:59 Ho Chi Minh City time**. It requires a working hosted app and full source in a public GitHub repository. A private Sites preview is for owner review; public judge access and public GitHub delivery still need to be finalized.
+The official event page reviewed on 17 October 2026 gives a deadline of **19 October 2026, 23:59 Ho Chi Minh City time**. It requires a working hosted app and full source in a public GitHub repository. Full source is public at https://github.com/RainyinSaiGon/the-estimator. The public overview opens without signing in; each workspace requires sign-in and stores records by user. Hosted AI is intentionally unconfigured at the owner's request; use the labelled sample parser.
 
 No real CRM credentials or client data are required to try the fictional scenario. This application estimates integration work; it does not execute CRM integrations or send client commitments.

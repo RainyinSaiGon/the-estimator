@@ -27,8 +27,18 @@ Delivery leads and presales engineers interpret vague software integration brief
 9. Scope persisted D1 records by authenticated user. Reject stale updates and cross-origin mutations.
 10. Export estimates to Markdown and workspace records to JSON.
 
-## P1 and non-goals
-P1: history CSV import, PDF extraction, richer scope-revision comparison, representative held-out accuracy evaluation.
+## Review and learning improvements
+
+- Question order prioritizes unresolved baseline blockers, then remaining unknowns by the spread of central effort across supported answers. Each scenario holds other answers and the history dataset fixed. It is model sensitivity, not a probability or client quote.
+- Source facts have a conservative matching passage. Human confirmations carry the answer, timestamp and review notes. Unverified suggestions remain provisional; the original brief stays unchanged.
+- New ordinary requests default to recorded-only history. Sample requests include synthetic examples. Reviewers can change the policy before saving a new baseline. Legacy projects retain demonstration-mode behavior until reviewed.
+- New frozen estimates record the engine version, configuration, history policy and every contributing reference ID. Reference details expose matching/known drivers and all task observations. Similarity is not confidence.
+- Learning reports compare stored base/adjusted predictions with original-scope actual effort. They separate recorded and synthetic cohorts, exclude added hours, and report sample count, MAE, signed bias and descriptive range coverage. Historical predictions are never recomputed with future outcomes.
+- Saved versions and the current draft can be compared by drivers, inclusions, review notes, task effort, range and calculation context. Replacements need a reason. Saved versions remain immutable and can be exported individually.
+- Project payloads use schema version 2. Legacy live fields receive explicit defaults; old snapshot fields and values remain unchanged and missing provenance is labelled unknown.
+
+## Later and non-goals
+Later: history CSV import, PDF extraction, editing/re-analyzing source documents, and representative independent accuracy evaluation. Existing illustrative outcomes do not establish real-world prediction accuracy.
 
 This version does not build CRM connectors, autonomously commit to a client, send messages, bill clients, estimate arbitrary software domains or promise production accuracy from synthetic examples.
 
@@ -40,9 +50,9 @@ Five confirmed drivers determine task base hours. Historical matches use a weigh
 Eight fictional reference projects provide demonstration history. Actuals entered using the illustrative fill button remain labelled synthetic. Changed estimates demonstrate calibration, not proven improvement. A future evaluation must keep test projects separate from calibration and compare absolute error and range coverage without outcome leakage.
 
 ## Timeline and remaining decisions
-The event page read on 14 October 2026 states final submissions are due 18 October, 23:59 Ho Chi Minh City time, and require a hosted working app and full public GitHub source. Private Sites previews are not a public submission.
+The event page reviewed on 17 October 2026 states final submissions are due 19 October, 23:59 Ho Chi Minh City time, and require a hosted working app and full public GitHub source. The overview is public; authenticated workspaces remain private to each user. The source repository is public on GitHub.
 
-Owner: approve public judge access and choose the public GitHub destination before submitting. The API key was provisioned with a user-selected 24-hour lifetime; renew intentionally before the live event. Hosted runtime secrets require configuration separate from the ignored local env file.
+Owner decision on 17 October: publish the Site with private authenticated workspaces and leave hosted AI unconfigured for now. Use the sample-parser flow for judging. A local API key does not configure the hosted runtime.
 
 Organizers: team policy and exact venue were not confirmed by the published event FAQ.
 
