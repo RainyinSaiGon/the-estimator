@@ -20,6 +20,7 @@ from openapi_spec_validator import validate_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "contracts" / "v1" / "openapi.json"
+ROUTE_CHECK_PATH = ROOT / "scripts" / "check_bff_route.mjs"
 BRIEF_DIR = ROOT / "services" / "brief-intelligence"
 ESTIMATOR_DIR = ROOT / "services" / "estimator-go"
 SAMPLE_BRIEF = (
@@ -126,6 +127,77 @@ def stop_process(process: subprocess.Popen[bytes] | None) -> None:
         process.wait(timeout=5)
 
 
+def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:
+    for path, component in (("/health/live", "HealthLive"), ("/health/ready", readiness_schema)):
+        status, body = json_request(f"{base_url}{path}")
+        if status != 200:
+            raise RuntimeError(f"{name} {path} returned HTTP {status}: {body}")
+        validate_payload(spec, component, body, f"{name} {path} response")
+
+
+def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[str, Any]) -> None:
+    completed = subprocess.run(
+        ["node", "--experimental-strip-types", str(ROUTE_CHECK_PATH)],
+        cwd=ROOT,
+        input=json.dumps({"scope": scope, "estimate": estimate}),
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "BFF route checks failed. "
+            f"stdout: {completed.stdout.strip()} stderr: {completed.stderr.strip()}"
+        )
+    try:
+        results = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"BFF route checker did not return JSON: {completed.stdout!r}") from error
+    if not isinstance(results, list) or any(not isinstance(item, dict) for item in results):
+        raise RuntimeError(f"BFF route checker returned an invalid result list: {results!r}")
+
+    expected_statuses = {
+        "success": 200,
+        "malformed-json": 400,
+        "oversized-body": 413,
+        "ai-unconfigured": 503,
+        "python-error": 422,
+        "estimator-error": 422,
+        "upstream-unavailable": 503,
+        "brief-timeout": 503,
+        "estimator-timeout": 503,
+    }
+    expected_errors = {
+        "malformed-json": "Request body must be valid JSON.",
+        "oversized-body": "Request body is too large.",
+        "ai-unconfigured": "AI parsing is not configured. Choose the sample parser.",
+        "python-error": "This brief is not supported.",
+        "estimator-error": "Invalid estimate request.",
+        "upstream-unavailable": "A preview service is unavailable. Start the local services and try again.",
+        "brief-timeout": "A service took too long to respond. Try again.",
+        "estimator-timeout": "A service took too long to respond. Try again.",
+    }
+    actual_names = {item.get("name") for item in results}
+    if actual_names != set(expected_statuses):
+        raise RuntimeError(
+            "BFF route checker returned unexpected scenarios: "
+            f"expected {sorted(expected_statuses)}, received {sorted(actual_names)}"
+        )
+    documented_responses = spec["paths"]["/api/v1/preview"]["post"]["responses"]
+    for result in results:
+        name = result["name"]
+        status = result.get("status")
+        if status != expected_statuses[name]:
+            raise RuntimeError(f"BFF {name} scenario returned HTTP {status}; expected {expected_statuses[name]}.")
+        if str(status) not in documented_responses:
+            raise RuntimeError(f"BFF HTTP {status} from {name} is missing from the OpenAPI responses.")
+        body = result.get("body")
+        if name in expected_errors and (not isinstance(body, dict) or body.get("error") != expected_errors[name]):
+            raise RuntimeError(f"BFF {name} returned an unexpected error body: {body!r}")
+        component = "PreviewResponse" if name == "success" else "BFFError"
+        validate_payload(spec, component, body, f"BFF {name} HTTP {status} response")
+
+
 def check_live_payloads(spec: dict[str, Any]) -> None:
     brief_port, estimate_port = free_port(), free_port()
     while estimate_port == brief_port:
@@ -175,6 +247,8 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             estimate_base = f"http://127.0.0.1:{estimate_port}"
             wait_until_ready(brief_process, f"{brief_base}/health/ready", "Python brief service")
             wait_until_ready(estimate_process, f"{estimate_base}/health/ready", "Go estimator")
+            check_service_health(spec, brief_base, "Python brief service", "BriefServiceReady")
+            check_service_health(spec, estimate_base, "Go estimator", "EstimatorServiceReady")
 
             brief_request = {"brief": SAMPLE_BRIEF, "parser": "sample"}
             validate_payload(spec, "BriefAnalyzeRequest", brief_request, "Python request")
@@ -203,6 +277,7 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
                 {"scope": scope, "estimate": estimate},
                 "BFF response",
             )
+            check_bff_route(spec, scope, estimate)
             validate_payload(
                 spec,
                 "BFFError",
@@ -279,7 +354,7 @@ def main() -> int:
         return 1
 
     print("OpenAPI 3.1 contract is valid.")
-    print("Live Python and Go success/error payloads and BFF success/error examples match their schemas.")
+    print("Live Python and Go health/success/error payloads and actual BFF success/error/timeout responses match their schemas.")
     return 0
 
 
