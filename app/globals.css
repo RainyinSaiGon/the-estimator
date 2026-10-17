@@ -254,6 +254,31 @@ tfoot td { font-size: 12px; font-weight: 500; background: #fafbf5; color: #404e3
 .metrics strong { font-size: 36px; display: block; margin-top: 15px; font-weight: 400; color: #232720; }
 .info-note { padding: 15px 18px; border: 1px solid #e5e7dd; background: #f4f5ee; border-radius: 10px; font-size: 12px; line-height: 1.8; color: #77836a; display: flex; gap: 9px; align-items: flex-start; }
 .history-panel { margin-top: 24px; }
+.history-import { margin-top: 24px; }
+.history-import-content { padding: 0 24px 24px; }
+.import-privacy { display: flex; align-items: flex-start; gap: 9px; padding: 12px 14px; color: #61745d; background: #f2f6ed; border: 1px solid #e2eadb; border-radius: 9px; font-size: 11px; line-height: 1.7; }
+.import-privacy svg { margin-top: 2px; }
+.import-file { display: inline-flex; position: relative; margin-top: 16px; overflow: hidden; }
+.import-file > span { display: inline-flex; align-items: center; gap: 8px; padding: 10px 15px; border: 1px solid #e2e2e2; border-radius: 24px; background: white; font-size: 11px; }
+.import-file:hover > span { background: #f4f4f2; border-color: #ccc; }
+.import-file input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }
+.import-file-name { margin-top: 12px; color: #777; font-size: 11px; }
+.import-success { margin-top: 12px; color: #52764b; font-size: 12px; }
+.import-mapping { margin-top: 17px; border: 1px solid #e9e9e5; border-radius: 10px; padding: 13px 15px; }
+.import-mapping summary { cursor: pointer; font-size: 12px; font-weight: 550; }
+.import-mapping summary span { display: block; color: #777; font-size: 10px; font-weight: 400; margin-top: 3px; }
+.import-mapping-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }
+.import-mapping-grid label { display: grid; gap: 5px; font-size: 10px; color: #555; }
+.import-mapping-grid label > span { color: #a26242; }
+.import-mapping-grid select { padding: 8px 10px; font-size: 11px; }
+.import-mapping > small { color: #777; font-size: 10px; line-height: 1.6; }
+.import-preview { margin-top: 17px; max-height: 360px; }
+.import-preview table { min-width: 690px; }
+.import-preview td { vertical-align: top; }
+.import-preview td .tag { white-space: normal; letter-spacing: 0; line-height: 1.5; }
+.import-actions { align-items: center; gap: 12px; }
+.import-actions small { max-width: 540px; color: #777; line-height: 1.7; }
+.history-import .field-help { margin-top: 12px; }
 .page-footer { display: flex; justify-content: space-between; gap: 20px; padding: 40px 0 25px; color: #92958c; font-size: 10px; }
 .workspace-empty { min-height: 60vh; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; gap: 16px; padding: 45px 20px; }
 .empty-request-icon { width: 66px; height: 66px; display: grid; place-items: center; background: #efeeea; border-radius: 20px; color: #77746a; margin-bottom: 7px; }
