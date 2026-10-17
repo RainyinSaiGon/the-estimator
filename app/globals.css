@@ -297,7 +297,7 @@ tfoot td { font-size: 12px; font-weight: 500; background: #fafbf5; color: #404e3
 .demo-question small { display: block; font-size: 9px; margin-top: 5px; color: #a89470; }
 .demo-paper-footer { display: flex; align-items: center; gap: 6px; font-size: 9px; color: #939083; border-top: 1px solid #efeee7; padding: 12px 17px; }
 .floating-label { position: absolute; top: 55px; right: 26px; background: #fffdf9e8; color: #80745b; padding: 9px 13px; border: 1px solid #ffffff99; border-radius: 30px; display: flex; align-items: center; gap: 7px; font-size: 10px; transform: rotate(4deg); box-shadow: 0 3px 10px #5e492d05; }
-.scene-caption { position: absolute; bottom: 16px; right: 25px; font-size: 7px; letter-spacing: 1.2px; color: #9f9380; }
+.scene-caption { position: absolute; bottom: 16px; right: 25px; font-size: 8px; letter-spacing: .9px; color: #8c806e; }
 .preview-1 { background: #f2f6f4; }
 .preview-1 .scene-glow { background: radial-gradient(circle at 50% 40%, #e5eee2, #9ebbb6 40%, #729e9d 58%, transparent 72%); }
 .effort-paper, .delivery-paper { width: 330px; margin: 34px auto 42px; transform: rotate(2deg); }
@@ -434,13 +434,13 @@ tfoot td { font-size: 12px; font-weight: 500; background: #fafbf5; color: #404e3
   .showcase-copy h2 { font-size: 29px; }
   .showcase-copy > p { font-size: 12px; }
   .showcase-copy > .text-button { font-size: 11px; }
-  .demo-scene { min-height: 400px; }
+  .demo-scene { min-height: 460px; }
   .source-paper { top: 43px; left: 4px; width: 215px; }
   .source-paper > p { font-size: 12px; }
   .scope-paper { top: 133px; right: 16px; width: 255px; }
   .demo-check { font-size: 10px; }
   .floating-label { font-size: 9px; padding: 8px 10px; top: 67px; right: 8px; }
-  .scene-caption { font-size: 6px; right: 16px; }
+  .scene-caption { font-size: 8px; right: 16px; }
   .effort-paper, .delivery-paper { width: 285px; }
   .home-context { flex-direction: column; align-items: flex-start; gap: 14px; padding-block: 24px; }
   .home-context > div { gap: 22px; }
@@ -517,12 +517,12 @@ tfoot td { font-size: 12px; font-weight: 500; background: #fafbf5; color: #404e3
   .showcase-copy h2 { font-size: 31px; margin-top: 18px; }
   .showcase-copy > p { max-width: 340px; font-size: 12px; margin-top: 14px; }
   .showcase-copy > .text-button { margin-top: 18px; }
-  .demo-scene { min-height: 410px; margin-top: 4px; }
+  .demo-scene { min-height: 460px; margin-top: 4px; }
   .source-paper { top: 40px; left: 20px; width: 213px; }
   .scope-paper { top: 117px; right: 20px; width: 249px; }
   .floating-label { top: 42px; right: 13px; font-size: 8px; }
   .scene-glow { right: -85px; width: 370px; height: 370px; }
-  .scene-caption { font-size: 6px; right: 20px; bottom: 11px; }
+  .scene-caption { font-size: 7px; right: 20px; bottom: 11px; }
   .effort-paper { margin: 24px auto 40px; width: min(285px, 88%); }
   .delivery-paper { margin: 30px auto 40px; width: min(285px, 88%); }
   .home-context { padding: 22px 2px; gap: 13px; }
