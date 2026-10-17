@@ -4,7 +4,12 @@ A working scoping and effort-estimation workspace for CRM/API integrations and C
 
 Client brief → source-grounded scope → clarifying questions → task estimate → reviewed baseline → actual hours → calibration of comparable future work.
 
-## What works
+## Existing deployed application (legacy runtime)
+
+The current public Site is still the original application. It remains available on this branch while the Next.js and microservice migration is reviewed; this first slice does not replace its hosted runtime or stored workspaces.
+
+### Existing workflow
+
 - Live OpenAI structured extraction with schema validation and verified source passages.
 - An explicitly labelled sample parser that runs without API usage.
 - Editable scope inclusions, five effort drivers, review notes and heuristic planning ranges.
@@ -19,21 +24,43 @@ Client brief → source-grounded scope → clarifying questions → task estimat
 
 Eight initial historical projects are **synthetic demonstration examples**. The illustrative-hours button marks its output as synthetic too. A changed estimate demonstrates the learning mechanism; predictive accuracy improvement has not been established.
 
-## Run locally
-Use Node 22.13+ (Node 24 was used during development).
+## Run the new local service slice
+Use Docker Compose, which builds and starts the Next.js web app, Python brief service, and Go estimator service. Only the web app is published, bound to loopback at `http://127.0.0.1:3000/`.
+
+```powershell
+docker compose up --build
+```
+
+The sample estimate is ephemeral. The brief service extracts source passages with deterministic rules; the Go service returns task hours, ranges, and blockers using synthetic demonstration history. AI parsing is unconfigured, and no records are stored.
+
+For a source-based local development setup, use Node 22.13+, Go 1.26+, and Python 3.12+ in three terminals:
+
+```powershell
+go run ./services/estimator-go/cmd/estimator
+```
+
+```powershell
+python -m uvicorn main:app --app-dir services/brief-intelligence --host 127.0.0.1 --port 8001
+```
 
 ```powershell
 npm ci
-npm run build
-node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_mean_jubilee.sql
 npm run dev
 ```
 
-Apply that initial SQL file **once per new local database**. It is already applied in the current workspace. For future schema changes, run `npm run db:generate` and apply only new migration files. Local data lives in ignored `.wrangler/state`; production storage is separate.
+The root `dev`, `build`, and `start` scripts run the native Next.js app in `apps/web`. The previous Sites implementation remains available while this migration is reviewed:
 
-Open the printed loopback URL, normally `http://127.0.0.1:5173/`. The portable development server provides its documented local test identity. Production authentication is owned by Sites; records are scoped to the authenticated user's ID.
+```powershell
+npm run build:legacy
+node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_mean_jubilee.sql
+npm run dev:legacy
+```
 
-For live analysis, the server reads `OPENAI_API_KEY` from the ignored `.env.local` file and optionally `OPENAI_MODEL` (default `gpt-5.4-mini`). Use the secure API key setup flow; do not commit credentials. The key selected during setup has a 24-hour lifetime. The example file lists names only. Hosted runtime credentials are configured separately from local files.
+Apply that initial SQL file once per new local legacy database. It is already applied in the current workspace. For future schema changes, run `npm run db:generate` and apply only new migration files. Local legacy data lives in ignored `.wrangler/state`; production storage is separate. `npm run start:legacy` serves a previously built legacy worker.
+
+The legacy development server opens on `http://127.0.0.1:5173/`. The portable development server provides its documented local test identity. Production authentication is owned by Sites; records are scoped to the authenticated user's ID. The new preview does not use that persistence or authentication path.
+
+Only the legacy application reads `OPENAI_API_KEY` from ignored `.env.local` and optionally `OPENAI_MODEL`. The new Next.js preview does not load the local key or call an AI provider. Hosted AI remains unconfigured; never commit credentials.
 
 If a Windows package-manager shim fails, these direct entrypoints use the same project scripts:
 
@@ -42,11 +69,15 @@ node scripts/run-framework.mjs build
 node scripts/run-framework.mjs dev
 ```
 
-## Checks
+## Existing application checks
+
+These existing checks cover the TypeScript/legacy workflow. The new web app's `npm run build` is the native Next.js production build.
+
 ```powershell
 npm test
 npm run typecheck
 npm run build
+npm run build:legacy
 npm run check:secrets
 ```
 
@@ -58,6 +89,11 @@ The language model extracts requirements and confirmed facts, not hours. A separ
 Historical matches use weighted feature similarity of at least 0.45. Each task uses a median actual-to-base effort ratio, shrunk toward 1 with four prior observations. Individual ratios are bounded between 0.35 and 3. Unknowns, sparse history and observed spread widen a **heuristic planning range**, not a statistical confidence interval. Original-scope hours enter calibration; added scope does not. A project is excluded from its own current estimate.
 
 ## Source map
+- `apps/web/app/`: native Next.js and Tailwind application, with `/estimate` and the preview BFF route.
+- `services/brief-intelligence/`: Python FastAPI sample parser and source-linked scope extraction.
+- `services/estimator-go/`: Go estimation engine and deterministic synthetic-history calibration.
+- `compose.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration.
+- `docs/adr/0001-next-go-python-first-slice.md`: service ownership, boundaries and migration constraints.
 - `app/home-screen.tsx`: interactive product overview and sample entry points.
 - `app/workspace-app.tsx`: shared navigation, the three-stage workspace and project history.
 - `app/globals.css`: responsive UI and shared visual system; see `docs/ui-design.md`.
