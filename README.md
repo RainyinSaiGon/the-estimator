@@ -31,7 +31,21 @@ Use Docker Compose, which builds and starts the Next.js web app, Python brief se
 docker compose up --build
 ```
 
-The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules; the Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. The local preview is ephemeral and stores no request or estimate records.
+The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules; the Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. By default the local preview is ephemeral and stores no request or estimate records.
+
+### Optional private workspaces
+
+P1 adds an opt-in, local-only private-record path. It remains disabled unless a generic OIDC provider, PostgreSQL, a shared web-to-Go service-token secret, a client-content encryption key, and an identity-index key are all configured. No provider or credentials are selected in this repository, so the standard Compose command remains ephemeral and the private save control stays unavailable. Configure the provider's callback as `http://localhost:3000/api/auth/callback/oidc` for a local setup.
+
+After merging the placeholders in `compose.private-records.env.example` into your ignored root `.env.local` and configuring the values described in [service operations](docs/service-operations.md#optional-private-records), start the separate local database overlay. Preserve any existing `OPENAI_API_KEY` line when editing that local file:
+
+```powershell
+docker compose --env-file .env.local -f compose.yaml -f compose.private-records.yaml up --build
+```
+
+Only the web BFF is published on loopback. PostgreSQL and Go remain on the Compose network. The browser never supplies an owner ID: the BFF validates the OIDC session and signs a 60-second Go service token; Go verifies it and maps the issuer/subject to an internal account using a keyed pseudonymous index. Go is the only service with database credentials. Each saved version keeps the original suggestion, reviewed scope, source, uploaded original file (when present), and confirmed estimate as one AES-256-GCM encrypted snapshot. Titles and source content are encrypted; database metadata is limited to random IDs, a keyed owner index, timestamps, and schema version. Version 1 reserves a nullable delivery outcome for the later delivery-history phase. Users can open, delete one estimate, or delete their workspace; expired records are hidden immediately and purged every six hours. The configured retention defaults to 90 days and is bounded to 1–3650 days.
+
+This path is an unconfigured local preview, not a production-ready identity or migration system. It does not import existing Sites/D1 workspaces, and it does not change production routing or the judge URL. Do not rotate the content or identity-index key without a planned re-encryption/reindex operation.
 
 For a local AI run, point Compose at an ignored file that contains `OPENAI_API_KEY` (the root `.env.local` is the local configuration file when present). The key is passed only to the Python service at runtime; it is not copied into the web container or image:
 
@@ -113,10 +127,10 @@ The language model extracts requirements and confirmed facts, not hours. A separ
 Historical matches use weighted feature similarity of at least 0.45. Each task uses a median actual-to-base effort ratio, shrunk toward 1 with four prior observations. Individual ratios are bounded between 0.35 and 3. Unknowns, sparse history and observed spread widen a **heuristic planning range**, not a statistical confidence interval. Original-scope hours enter calibration; added scope does not. A project is excluded from its own current estimate.
 
 ## Source map
-- `apps/web/app/`: native Next.js and Tailwind application, with `/estimate` and the preview BFF route.
+- `apps/web/app/`: native Next.js and Tailwind application, with `/estimate`, preview routes, generic OIDC callback, and optional private-record BFF routes.
 - `services/brief-intelligence/`: Python FastAPI document extraction, sample parser, and optional specialist-agent analysis.
-- `services/estimator-go/`: Go integration estimator and a separate uncalibrated general-work planning path.
-- `compose.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration.
+- `services/estimator-go/`: Go integration estimator, uncalibrated general-work planning, and the optional encrypted private-record store.
+- `compose.yaml`, `compose.private-records.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration; the private database overlay is opt-in.
 - `docs/service-operations.md`: health checks, structured request logs, timeout defaults and secret-loading rules.
 - `docs/adr/0001-next-go-python-first-slice.md`: service ownership, boundaries and migration constraints.
 - `app/home-screen.tsx`: interactive product overview and sample entry points.

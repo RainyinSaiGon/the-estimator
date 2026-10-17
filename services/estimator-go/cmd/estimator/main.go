@@ -134,6 +134,20 @@ func main() {
 		slog.Error("invalid_server_configuration", "service", "estimator-go", "setting", "REQUEST_TIMEOUT")
 		os.Exit(2)
 	}
+	shutdownContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	records, err := openRecordStore()
+	if err != nil {
+		slog.Error("invalid_private_record_configuration", "service", "estimator-go")
+		os.Exit(2)
+	}
+	if records == nil {
+		slog.Info("private_records_disabled", "service", "estimator-go")
+	} else {
+		defer records.close()
+		slog.Info("private_records_ready", "service", "estimator-go", "retention_days", records.retentionDays)
+		go records.runRetentionCleanup(shutdownContext)
+	}
 	readHeaderTimeout := 5 * time.Second
 	if requestTimeout < readHeaderTimeout {
 		readHeaderTimeout = requestTimeout
@@ -142,9 +156,19 @@ func main() {
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
-	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("GET /health/ready", func(w http.ResponseWriter, r *http.Request) {
+		if !records.ready(r.Context()) {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"status": "not_ready", "engine": "integration-effort/2.0"})
+			return
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "engine": "integration-effort/2.0"})
 	})
+	mux.HandleFunc("GET /v1/records/status", records.handleRecordStatus)
+	mux.HandleFunc("GET /v1/records", records.handleRecords)
+	mux.HandleFunc("POST /v1/records", records.handleRecords)
+	mux.HandleFunc("DELETE /v1/records", records.handleRecords)
+	mux.HandleFunc("GET /v1/records/{recordID}", records.handleRecord)
+	mux.HandleFunc("DELETE /v1/records/{recordID}", records.handleRecord)
 	mux.HandleFunc("POST /v1/estimates", estimateHandler)
 	mux.HandleFunc("POST /v1/estimates/general", generalEstimateHandler)
 	server := &http.Server{
@@ -157,8 +181,6 @@ func main() {
 		MaxHeaderBytes:    1 << 20,
 	}
 
-	shutdownContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stopSignals()
 	go func() {
 		<-shutdownContext.Done()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

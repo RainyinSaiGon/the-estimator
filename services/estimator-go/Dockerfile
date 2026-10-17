@@ -1,6 +1,6 @@
 FROM golang:1.26-alpine AS build
 WORKDIR /src
-COPY services/estimator-go/go.mod ./go.mod
+COPY services/estimator-go/go.mod services/estimator-go/go.sum ./
 COPY services/estimator-go/cmd ./cmd
 RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/estimator ./cmd/estimator
 

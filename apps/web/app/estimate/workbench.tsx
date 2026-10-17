@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useState } from "react";
+import { signOut } from "next-auth/react";
+import { useCallback, useEffect, useState } from "react";
 
 const sampleBrief = `Hi team,
 
@@ -42,6 +43,18 @@ type Estimate = {
   references: { id: string; name: string; score: number; synthetic?: boolean }[];
   provenance: { mode?: string; dataBasis?: string; historyPolicy?: string };
 };
+type PrivateRecordSummary = { id: string; title: string; createdAt: string; expiresAt: string };
+type PrivateRecordSnapshot = {
+  schemaVersion: 1;
+  title: string;
+  source: Scope["source"];
+  originalFile: { name: string; type: string; contentBase64: string } | null;
+  suggestedScope: Scope;
+  reviewedScope: Scope;
+  estimate: Estimate;
+  deliveryOutcome: null;
+};
+type PrivateRecordStatus = { oidcConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
 
 const supportedFiles = ".pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,.eml";
 
@@ -56,24 +69,81 @@ function hasSourceEvidence(source: string, quote: string) {
   return normalizedQuote.length > 0 && normalizedEvidence(source).includes(normalizedQuote);
 }
 
+function scopeForStorage(value: Scope): Scope {
+  return { ...value, source: { ...value.source, reviewText: "" } };
+}
+
+async function fileContentBase64(file: File) {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  const chunks: string[] = [];
+  const chunkSize = 32_768;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    chunks.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return btoa(chunks.join(""));
+}
+
 export default function EstimateWorkbench() {
   const [brief, setBrief] = useState(sampleBrief);
   const [file, setFile] = useState<File | null>(null);
   const [parser, setParser] = useState<Parser>("ai");
   const [capabilityText, setCapabilityText] = useState("");
   const [scope, setScope] = useState<Scope | null>(null);
+  const [suggestedScope, setSuggestedScope] = useState<Scope | null>(null);
   const [estimate, setEstimate] = useState<Estimate | null>(null);
   const [reviewConfirmed, setReviewConfirmed] = useState(false);
-  const [busy, setBusy] = useState<"analyze" | "estimate" | null>(null);
+  const [busy, setBusy] = useState<"analyze" | "estimate" | "save" | null>(null);
   const [error, setError] = useState("");
+  const [recordTitle, setRecordTitle] = useState("");
+  const [recordStatus, setRecordStatus] = useState<PrivateRecordStatus | null>(null);
+  const [savedRecords, setSavedRecords] = useState<PrivateRecordSummary[]>([]);
+  const [recordsSignedIn, setRecordsSignedIn] = useState<boolean | null>(null);
+  const [recordsMessage, setRecordsMessage] = useState("");
+  const [recordAction, setRecordAction] = useState<string | null>(null);
+  const [originalFileDownload, setOriginalFileDownload] = useState<{ name: string; url: string } | null>(null);
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
 
   function clearReview() {
     setScope(null);
+    setSuggestedScope(null);
     setEstimate(null);
+    setOriginalFileDownload(null);
     setReviewConfirmed(false);
     setError("");
   }
+
+  const refreshSavedRecords = useCallback(async () => {
+    try {
+      const statusResponse = await fetch("/api/v1/records/status", { cache: "no-store" });
+      const status = await statusResponse.json() as PrivateRecordStatus;
+      setRecordStatus(status);
+      if (!status.recordsEnabled) {
+        setSavedRecords([]);
+        setRecordsSignedIn(null);
+        return;
+      }
+      const response = await fetch("/api/v1/records", { cache: "no-store" });
+      if (response.status === 401) {
+        setSavedRecords([]);
+        setRecordsSignedIn(false);
+        return;
+      }
+      if (!response.ok) throw new Error("Your saved estimates could not be loaded.");
+      const result = await response.json() as { records: PrivateRecordSummary[] };
+      setSavedRecords(result.records);
+      setRecordsSignedIn(true);
+      setRecordsMessage("");
+    } catch {
+      setRecordStatus((current) => current ?? { oidcConfigured: false, recordsEnabled: false, retentionDays: 90, message: "Private storage could not be reached." });
+      setRecordsMessage("Saved estimates could not be loaded. Try again in a moment.");
+    }
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => { void refreshSavedRecords(); }, 0);
+    return () => window.clearTimeout(timer);
+  }, [refreshSavedRecords]);
+  useEffect(() => () => { if (originalFileDownload) URL.revokeObjectURL(originalFileDownload.url); }, [originalFileDownload]);
 
   function updateRequirement(index: number, patch: Partial<Requirement>) {
     setScope((current) => current ? {
@@ -100,6 +170,7 @@ export default function EstimateWorkbench() {
     setBusy("analyze");
     setError("");
     setEstimate(null);
+    setOriginalFileDownload(null);
     setReviewConfirmed(false);
     const capabilities = capabilityText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
     try {
@@ -119,6 +190,8 @@ export default function EstimateWorkbench() {
       const payload = await response.json() as { scope?: Scope; error?: string };
       if (!response.ok || !payload.scope) throw new Error(payload.error ?? "The request could not be analyzed.");
       setScope(payload.scope);
+      setSuggestedScope(payload.scope);
+      setRecordTitle(payload.scope.summary.replace(/\s+/g, " ").trim().slice(0, 200));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The request could not be analyzed.");
     } finally {
@@ -147,10 +220,113 @@ export default function EstimateWorkbench() {
     }
   }
 
+  async function savePrivateEstimate() {
+    if (!scope || !suggestedScope || !estimate || !recordTitle.trim()) return;
+    setBusy("save");
+    setRecordsMessage("");
+    try {
+      const payload: PrivateRecordSnapshot = {
+        schemaVersion: 1,
+        title: recordTitle.trim(),
+        source: scope.source,
+        originalFile: file ? { name: file.name, type: file.type || "application/octet-stream", contentBase64: await fileContentBase64(file) } : null,
+        suggestedScope: scopeForStorage(suggestedScope),
+        reviewedScope: scopeForStorage(scope),
+        estimate,
+        deliveryOutcome: null,
+      };
+      const response = await fetch("/api/v1/records", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ schemaVersion: 1, reviewConfirmed: true, payload }),
+      });
+      const result = await response.json().catch(() => ({})) as { error?: string };
+      if (response.status === 401) {
+        setRecordsSignedIn(false);
+        throw new Error("Sign in to save this estimate to your private workspace.");
+      }
+      if (!response.ok) throw new Error(result.error ?? "The estimate could not be saved.");
+      setRecordsSignedIn(true);
+      setRecordsMessage("Saved to your private workspace.");
+      await refreshSavedRecords();
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The estimate could not be saved.");
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function openPrivateRecord(recordId: string) {
+    setRecordAction(recordId);
+    setRecordsMessage("");
+    try {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(recordId)}`, { cache: "no-store" });
+      const result = await response.json() as { payload?: PrivateRecordSnapshot; error?: string };
+      if (response.status === 401) setRecordsSignedIn(false);
+      if (!response.ok || !result.payload) throw new Error(result.error ?? "The saved estimate could not be opened.");
+      const snapshot = result.payload;
+      const source = snapshot.source;
+      setSuggestedScope({ ...snapshot.suggestedScope, source });
+      setScope({ ...snapshot.reviewedScope, source });
+      setEstimate(snapshot.estimate);
+      setRecordTitle(snapshot.title);
+      setReviewConfirmed(true);
+      setBrief(source.reviewText);
+      setFile(null);
+      if (snapshot.originalFile) {
+        const binary = atob(snapshot.originalFile.contentBase64);
+        const bytes = new Uint8Array(binary.length);
+        for (let index = 0; index < binary.length; index++) bytes[index] = binary.charCodeAt(index);
+        const blob = new Blob([bytes], { type: snapshot.originalFile.type || "application/octet-stream" });
+        setOriginalFileDownload({ name: snapshot.originalFile.name, url: URL.createObjectURL(blob) });
+      } else {
+        setOriginalFileDownload(null);
+      }
+      setError("");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The saved estimate could not be opened.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
+  async function deletePrivateRecord(recordId: string) {
+    if (!window.confirm("Delete this saved estimate? This cannot be undone.")) return;
+    setRecordAction(recordId);
+    try {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(recordId)}`, { method: "DELETE" });
+      if (response.status === 401) setRecordsSignedIn(false);
+      if (!response.ok) throw new Error("The saved estimate could not be deleted.");
+      setSavedRecords((current) => current.filter((item) => item.id !== recordId));
+      setRecordsMessage("Saved estimate deleted.");
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The saved estimate could not be deleted.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
+  async function deleteAllPrivateRecords() {
+    if (!window.confirm("Delete every saved estimate in this private workspace? This cannot be undone.")) return;
+    setRecordAction("all");
+    try {
+      const response = await fetch("/api/v1/records", { method: "DELETE" });
+      if (response.status === 401) setRecordsSignedIn(false);
+      if (!response.ok) throw new Error("The private workspace could not be deleted.");
+      setSavedRecords([]);
+      setRecordsMessage("All saved estimates were deleted.");
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The private workspace could not be deleted.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
   return <main className="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-10">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · not saved</span>
+      <span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · private saving optional</span>
     </header>
 
     <div className="grid gap-8 py-8 lg:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)] lg:gap-10">
@@ -210,6 +386,7 @@ export default function EstimateWorkbench() {
           </div>
           <p className="mt-5 text-sm leading-6">{scope.summary}</p>
           <p className="mt-3 text-xs text-[var(--muted)]">Source: {scope.source.name} · {scope.source.type.toUpperCase()} · {scope.source.characters.toLocaleString()} extracted characters{scope.source.truncated ? " · truncated at the extraction limit" : ""}</p>
+          {originalFileDownload && <p className="mt-2 text-xs"><a href={originalFileDownload.url} download={originalFileDownload.name} className="underline underline-offset-2">Download original client file</a></p>}
           <details className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4">
             <summary className="cursor-pointer text-sm font-medium">View extracted source text</summary>
             <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap text-xs leading-5 text-[var(--muted)]">{scope.source.reviewText}</pre>
@@ -251,10 +428,21 @@ export default function EstimateWorkbench() {
             {estimate.assumptions.length > 0 && <section className="mt-6"><h4 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Estimate basis & assumptions</h4><ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-5 text-[var(--muted)]">{estimate.assumptions.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
             {estimate.blockers.length > 0 && <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4"><h4 className="text-sm font-medium">Questions before committing</h4><ul className="mt-2 list-inside list-disc space-y-1 text-sm leading-6 text-amber-950">{estimate.blockers.map((item) => <li key={item}>{item}</li>)}</ul></div>}
             {estimate.references.length > 0 && <p className="mt-4 text-xs text-[var(--muted)]">{estimate.references.length} comparable reference(s); {estimate.references.every((item) => item.synthetic) ? "all are synthetic demonstrations" : "recorded and synthetic references are shown separately in provenance"}.</p>}
-            <p className="mt-5 text-xs leading-5 text-[var(--muted)]">{scope.estimateMode === "general" ? "General-work bands are uncalibrated planning priors." : "Demonstration references are fictional."} This is a planning aid, not a delivery commitment. This preview does not save or retain the submitted request.</p>
+            <p className="mt-5 text-xs leading-5 text-[var(--muted)]">{scope.estimateMode === "general" ? "General-work bands are uncalibrated planning priors." : "Demonstration references are fictional."} This is a planning aid, not a delivery commitment. Nothing is stored unless you explicitly save it to a configured private workspace.</p>
+            <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5">
+              <div className="flex flex-wrap items-start justify-between gap-4"><div><h4 className="text-sm font-semibold">Save a reviewed estimate privately</h4><p className="mt-1 max-w-xl text-xs leading-5 text-[var(--muted)]">Your original suggestion, reviewed scope, source, and confirmed estimate are encrypted before storage. Saving creates a new immutable snapshot; it never overwrites an earlier one. Records expire after {recordStatus?.retentionDays ?? 90} days.</p></div><span className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">Explicit save</span></div>
+              {recordStatus?.recordsEnabled ? recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-white p-4"><p className="text-sm text-[var(--muted)]">Sign in with your organization account to save or open private estimates.</p><a href="/api/auth/signin/oidc?callbackUrl=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</a></div> : <div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Estimate name<input aria-label="Private estimate name" value={recordTitle} maxLength={200} onChange={(event) => setRecordTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={savePrivateEstimate} disabled={busy !== null || !recordTitle.trim() || !suggestedScope} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">{busy === "save" ? "Saving privately…" : "Save private estimate"}</button></div> : <p className="mt-4 rounded-xl border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--muted)]">{recordStatus?.message ?? "Checking private storage configuration…"} This preview remains ephemeral until OIDC login and encrypted storage are configured.</p>}
+              {recordsMessage && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
+            </div>
           </section>}
         </div>}
       </section>
     </div>
+
+    <section className="border-t border-[var(--line)] py-8">
+      <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut({ callbackUrl: "/estimate" })} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
+      {!recordStatus?.recordsEnabled ? <p className="mt-3 text-sm text-[var(--muted)]">{recordStatus?.message ?? "Checking configuration…"}</p> : recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] p-5"><p className="text-sm text-[var(--muted)]">Sign in to view estimates in your private workspace.</p><a href="/api/auth/signin/oidc?callbackUrl=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</a></div> : savedRecords.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{recordsSignedIn === true ? "No saved estimates yet." : "Sign in after private storage is configured to access saved estimates."}</p> : <ul className="mt-4 grid gap-3 md:grid-cols-2">{savedRecords.map((record) => <li key={record.id} className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] p-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{record.title}</p><p className="mt-1 text-xs text-[var(--muted)]">Saved {new Date(record.createdAt).toLocaleDateString()} · expires {new Date(record.expiresAt).toLocaleDateString()}</p></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => openPrivateRecord(record.id)} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-medium disabled:opacity-50">{recordAction === record.id ? "Opening…" : "Open"}</button><button type="button" onClick={() => deletePrivateRecord(record.id)} disabled={recordAction !== null} aria-label={`Delete ${record.title}`} className="rounded-full px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">Delete</button></div></li>)}</ul>}
+      {recordsMessage && !estimate && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
+    </section>
   </main>;
 }

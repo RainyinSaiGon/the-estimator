@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.2.0",
-    "description": "Versioned wire contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go integration/general-work estimators. The local preview remains ephemeral and does not imply production persistence or hosted AI availability."
+    "version": "1.3.0",
+    "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Local preview persistence is opt-in; private records stay unavailable until OIDC, service authentication, PostgreSQL, and encryption configuration are complete."
   },
   "paths": {
     "/health/live": {
@@ -74,7 +74,14 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WebServiceNotReady"
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/WebServiceNotReady"
+                    },
+                    {
+                      "$ref": "#/components/schemas/EstimatorServiceNotReady"
+                    }
+                  ]
                 }
               }
             }
@@ -519,6 +526,599 @@
             }
           }
         }
+      }
+    },
+    "/api/v1/records/status": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Next.js BFF on the default local address"
+        }
+      ],
+      "get": {
+        "operationId": "getPrivateRecordStatus",
+        "summary": "Check whether private saving is configured",
+        "description": "Returns only generic capability state; it contains no user identity or record data.",
+        "responses": {
+          "200": {
+            "description": "Configuration state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/records": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Next.js BFF on the default local address"
+        }
+      ],
+      "get": {
+        "operationId": "listPrivateRecords",
+        "summary": "List the signed-in user’s saved estimates",
+        "responses": {
+          "200": {
+            "description": "Metadata and titles for the caller’s records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid OIDC session is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Private storage is not configured or is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "nextAuthSession": []
+          },
+          {
+            "secureNextAuthSession": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createPrivateRecord",
+        "summary": "Save an explicitly confirmed estimate snapshot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateRecordCreate"
+              }
+            }
+          },
+          "description": "The original file bytes (when uploaded), extracted source, suggested and reviewed scopes, estimate, and reserved delivery outcome are encrypted as one version 1 snapshot. Request body limit: 15,000,000 bytes."
+        },
+        "responses": {
+          "201": {
+            "description": "The private snapshot was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The snapshot is incomplete or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid OIDC session is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The snapshot exceeds the size limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Private storage is not configured or is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "nextAuthSession": []
+          },
+          {
+            "secureNextAuthSession": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deletePrivateWorkspace",
+        "summary": "Delete all saved estimates in the caller’s private workspace",
+        "responses": {
+          "204": {
+            "description": "The caller’s records and account mapping were deleted."
+          },
+          "401": {
+            "description": "A valid OIDC session is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Private storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "nextAuthSession": []
+          },
+          {
+            "secureNextAuthSession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/{recordId}": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Next.js BFF on the default local address"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "recordId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getPrivateRecord",
+        "summary": "Open one of the caller’s saved estimate snapshots",
+        "responses": {
+          "200": {
+            "description": "Encrypted snapshot decrypted for its owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid OIDC session is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The record is absent, expired, or belongs to another user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Private storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "nextAuthSession": []
+          },
+          {
+            "secureNextAuthSession": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deletePrivateRecord",
+        "summary": "Delete one of the caller’s saved estimates",
+        "responses": {
+          "204": {
+            "description": "The owner’s record was deleted."
+          },
+          "401": {
+            "description": "A valid OIDC session is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The record is absent or belongs to another user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Private storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "nextAuthSession": []
+          },
+          {
+            "secureNextAuthSession": []
+          }
+        ]
+      }
+    },
+    "/v1/records/status": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:8002",
+          "description": "Internal Go service on the default local address"
+        }
+      ],
+      "get": {
+        "operationId": "getEstimatorPrivateRecordStatus",
+        "summary": "Check Go private-record readiness",
+        "description": "Internal-only configuration state; does not disclose credentials or record data.",
+        "responses": {
+          "200": {
+            "description": "Whether the configured database is ready for private records.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimatorPrivateRecordStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/records": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:8002",
+          "description": "Internal Go service on the default local address"
+        }
+      ],
+      "get": {
+        "operationId": "listEstimatorPrivateRecords",
+        "summary": "List records for the token owner",
+        "responses": {
+          "200": {
+            "description": "Owner-scoped record metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid BFF service token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
+      },
+      "post": {
+        "operationId": "createEstimatorPrivateRecord",
+        "summary": "Persist an encrypted estimate snapshot",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PrivateRecordCreate"
+              }
+            }
+          },
+          "description": "The original file bytes (when uploaded), extracted source, suggested and reviewed scopes, estimate, and reserved delivery outcome are encrypted as one version 1 snapshot. Request body limit: 15,000,000 bytes."
+        },
+        "responses": {
+          "201": {
+            "description": "The encrypted snapshot was saved.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The snapshot is incomplete or invalid.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid BFF service token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteEstimatorPrivateWorkspace",
+        "summary": "Delete the token owner’s private workspace",
+        "responses": {
+          "204": {
+            "description": "The owner’s records and account mapping were deleted."
+          },
+          "401": {
+            "description": "A valid BFF service token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
+      }
+    },
+    "/v1/records/{recordID}": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:8002",
+          "description": "Internal Go service on the default local address"
+        }
+      ],
+      "parameters": [
+        {
+          "name": "recordID",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      ],
+      "get": {
+        "operationId": "getEstimatorPrivateRecord",
+        "summary": "Read an owner-scoped encrypted snapshot",
+        "responses": {
+          "200": {
+            "description": "The owner’s decrypted snapshot.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordSnapshot"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A valid BFF service token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found for token owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
+      },
+      "delete": {
+        "operationId": "deleteEstimatorPrivateRecord",
+        "summary": "Delete one owner-scoped snapshot",
+        "responses": {
+          "204": {
+            "description": "The owner’s record was deleted."
+          },
+          "401": {
+            "description": "A valid BFF service token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record not found for token owner.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
       }
     }
   },
@@ -1709,6 +2309,311 @@
           "estimate"
         ],
         "additionalProperties": false
+      },
+      "PrivateRecordStatus": {
+        "type": "object",
+        "properties": {
+          "oidcConfigured": {
+            "type": "boolean"
+          },
+          "recordsEnabled": {
+            "type": "boolean"
+          },
+          "retentionDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "oidcConfigured",
+          "recordsEnabled",
+          "retentionDays",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "EstimatorPrivateRecordStatus": {
+        "type": "object",
+        "properties": {
+          "recordsEnabled": {
+            "type": "boolean"
+          },
+          "retentionDays": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3650
+          }
+        },
+        "required": [
+          "recordsEnabled",
+          "retentionDays"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordList": {
+        "type": "object",
+        "properties": {
+          "records": {
+            "type": "array",
+            "maxItems": 200,
+            "items": {
+              "$ref": "#/components/schemas/PrivateRecordSummary"
+            }
+          }
+        },
+        "required": [
+          "records"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordSummary": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "createdAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordSnapshotPayload": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 240
+              },
+              "type": {
+                "type": "string",
+                "maxLength": 40
+              },
+              "characters": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "reviewText": {
+                "type": "string",
+                "maxLength": 200000
+              }
+            },
+            "required": [
+              "name",
+              "type",
+              "characters",
+              "truncated",
+              "reviewText"
+            ],
+            "additionalProperties": false
+          },
+          "suggestedScope": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "reviewedScope": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "estimate": {
+            "$ref": "#/components/schemas/Estimate"
+          },
+          "originalFile": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/PrivateRecordSourceFile"
+              }
+            ]
+          },
+          "deliveryOutcome": {
+            "type": "null",
+            "description": "Reserved in schema version 1; delivery outcomes are added by the later delivery-history phase."
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "title",
+          "source",
+          "suggestedScope",
+          "reviewedScope",
+          "estimate",
+          "originalFile",
+          "deliveryOutcome"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordCreate": {
+        "type": "object",
+        "properties": {
+          "schemaVersion": {
+            "const": 1
+          },
+          "payload": {
+            "$ref": "#/components/schemas/PrivateRecordSnapshotPayload"
+          },
+          "reviewConfirmed": {
+            "const": true
+          }
+        },
+        "required": [
+          "schemaVersion",
+          "reviewConfirmed",
+          "payload"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordCreated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "createdAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordSnapshot": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/PrivateRecordSnapshotPayload"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "payload",
+          "createdAt",
+          "expiresAt"
+        ],
+        "additionalProperties": false
+      },
+      "EstimatorServiceNotReady": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "const": "not_ready"
+          },
+          "engine": {
+            "const": "integration-effort/2.0"
+          }
+        },
+        "required": [
+          "status",
+          "engine"
+        ],
+        "additionalProperties": false
+      },
+      "PrivateRecordSourceFile": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "type": {
+            "type": "string",
+            "maxLength": 160
+          },
+          "contentBase64": {
+            "type": "string",
+            "contentEncoding": "base64",
+            "maxLength": 13981016
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "contentBase64"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "securitySchemes": {
+      "nextAuthSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "next-auth.session-token",
+        "description": "NextAuth session cookie; HTTPS deployments may use the __Secure-prefixed cookie name."
+      },
+      "serviceToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Short-lived BFF-to-Go service token. Never issued to browser code."
+      },
+      "secureNextAuthSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Secure-next-auth.session-token",
+        "description": "HTTPS NextAuth session cookie."
       }
     }
   }

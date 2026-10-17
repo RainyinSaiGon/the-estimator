@@ -3,10 +3,11 @@
 `v1/openapi.json` is the shared OpenAPI 3.1 contract for:
 
 - `POST /api/v1/preview` in the Next.js BFF;
+- `GET /api/v1/records/status`, `GET/POST/DELETE /api/v1/records`, and `GET/DELETE /api/v1/records/{recordId}` in the Next.js private-record BFF;
 - `POST /v1/briefs/analyze` and `POST /v1/briefs/analyze-document` in the Python intake and analysis service;
-- `POST /v1/estimates` and `POST /v1/estimates/general` in the Go estimator.
+- `POST /v1/estimates`, `POST /v1/estimates/general`, `GET /v1/records/status`, and the internal private-record routes in the Go estimator.
 
-The paths and wire behavior remain owned by those services. The document records current casing (`initialAnswers`, `historyPolicy`, `referenceIds`), accepted answer values, parser behavior, input limits, and known JSON error bodies. The BFF accepts pasted JSON or bounded multipart document uploads and supports explicit `sample` or `ai` mode. Sample mode works without credentials. AI mode requires local server configuration and can return a provider or permissions error; it never silently switches to sample mode. The Go integration endpoint defaults a missing history policy to `demo` and accepts `demo` or `recorded`; the general-work endpoint uses explicitly uncalibrated complexity bands.
+The paths and wire behavior remain owned by those services. The document records current casing (`initialAnswers`, `historyPolicy`, `referenceIds`), accepted answer values, parser behavior, input limits, and known JSON error bodies. The BFF accepts pasted JSON or bounded multipart document uploads and supports explicit `sample` or `ai` mode. Sample mode works without credentials. AI mode requires local server configuration and can return a provider or permissions error; it never silently switches to sample mode. The Go integration endpoint defaults a missing history policy to `demo` and accepts `demo` or `recorded`; the general-work endpoint uses explicitly uncalibrated complexity bands. Private-record routes return unavailable unless generic OIDC, service-token, PostgreSQL, and encryption settings are configured; they do not enable hosted persistence.
 
 ## Validation
 
