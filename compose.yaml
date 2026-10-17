@@ -6,7 +6,7 @@ services:
     environment:
       BRIEF_SERVICE_URL: http://brief:8001
       ESTIMATOR_SERVICE_URL: http://estimator:8002
-      PREVIEW_TIMEOUT_MS: "10000"
+      PREVIEW_TIMEOUT_MS: "50000"
     depends_on:
       brief:
         condition: service_healthy
@@ -29,7 +29,9 @@ services:
     environment:
       HOST: 0.0.0.0
       PORT: "8001"
-      REQUEST_TIMEOUT_SECONDS: "8"
+      REQUEST_TIMEOUT_SECONDS: "40"
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      AGENT_MODEL: ${AGENT_MODEL:-gpt-6.1-sol}
 
   estimator:
     build:

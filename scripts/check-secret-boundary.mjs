@@ -5,8 +5,8 @@ const secret = process.env.OPENAI_API_KEY;
 function walk(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(join(dir, entry.name)) : [join(dir, entry.name)]);
 }
-if (!existsSync('dist')) throw new Error('Build the application before checking the deployment output.');
 const artifactDirectories = ['dist', 'apps/web/.next'].filter(existsSync);
+if (artifactDirectories.length === 0) throw new Error('Build the application before checking the deployment output.');
 if (secret && artifactDirectories.flatMap(walk).some(file => readFileSync(file).includes(Buffer.from(secret)))) {
   throw new Error('A runtime credential was found in generated output. Do not publish this build.');
 }

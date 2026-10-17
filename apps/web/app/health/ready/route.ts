@@ -14,7 +14,7 @@ export async function GET(request: Request) {
       fetch(briefHealth, { cache: "no-store", signal: AbortSignal.timeout(1_500) }),
       fetch(estimatorHealth, { cache: "no-store", signal: AbortSignal.timeout(1_500) }),
     ]);
-    const payloads = await Promise.all(responses.map((response) => response.json().catch(() => null)));
+    const payloads = await Promise.all(responses.map((response) => response.json().catch(() => null) as Promise<Record<string, unknown> | null>));
     ready = responses[0].ok
       && responses[1].ok
       && payloads[0]?.status === "ready"

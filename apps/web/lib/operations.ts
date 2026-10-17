@@ -49,10 +49,10 @@ export function configuredServiceUrl(name: "BRIEF_SERVICE_URL" | "ESTIMATOR_SERV
 
 export function configuredPreviewTimeoutMs(): number {
   const raw = process.env.PREVIEW_TIMEOUT_MS;
-  if (raw === undefined || raw === "") return 10_000;
+  if (raw === undefined || raw === "") return 50_000;
   const timeoutMs = Number(raw);
-  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 30_000) {
-    throw new Error("PREVIEW_TIMEOUT_MS must be between 100 and 30000.");
+  if (!Number.isInteger(timeoutMs) || timeoutMs < 100 || timeoutMs > 60_000) {
+    throw new Error("PREVIEW_TIMEOUT_MS must be between 100 and 60000.");
   }
   return timeoutMs;
 }

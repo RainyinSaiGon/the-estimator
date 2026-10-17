@@ -2,15 +2,24 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.1.0",
-    "description": "Versioned wire contracts for the Next.js preview BFF, Python brief analysis service, and Go effort estimator. These contracts describe the current preview flow and do not imply production client-data persistence or hosted AI availability."
+    "version": "1.2.0",
+    "description": "Versioned wire contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go integration/general-work estimators. The local preview remains ephemeral and does not imply production persistence or hosted AI availability."
   },
   "paths": {
     "/health/live": {
       "servers": [
-        { "url": "http://127.0.0.1:3000", "description": "Default local address for the Next.js web app" },
-        { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
-        { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Default local address for the Next.js web app"
+        },
+        {
+          "url": "http://127.0.0.1:8001",
+          "description": "Default local address for the Python brief service"
+        },
+        {
+          "url": "http://127.0.0.1:8002",
+          "description": "Default local address for the Go estimator"
+        }
       ],
       "get": {
         "operationId": "checkServiceLiveness",
@@ -19,16 +28,31 @@
         "responses": {
           "200": {
             "description": "The service process is alive.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthLive" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthLive"
+                }
+              }
+            }
           }
         }
       }
     },
     "/health/ready": {
       "servers": [
-        { "url": "http://127.0.0.1:3000", "description": "Default local address for the Next.js web app" },
-        { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
-        { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Default local address for the Next.js web app"
+        },
+        {
+          "url": "http://127.0.0.1:8001",
+          "description": "Default local address for the Python brief service"
+        },
+        {
+          "url": "http://127.0.0.1:8002",
+          "description": "Default local address for the Go estimator"
+        }
       ],
       "get": {
         "operationId": "checkServiceReadiness",
@@ -37,11 +61,23 @@
         "responses": {
           "200": {
             "description": "Service-specific readiness information.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthReady" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthReady"
+                }
+              }
+            }
           },
           "503": {
             "description": "The web app is alive but one or more preview APIs are not ready.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebServiceNotReady" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebServiceNotReady"
+                }
+              }
+            }
           }
         }
       }
@@ -49,40 +85,83 @@
     "/api/v1/preview": {
       "post": {
         "operationId": "createPreview",
-        "summary": "Create a brief analysis and effort estimate preview",
-        "description": "Next.js BFF route. Accepts at most 100,000 request bytes and a brief of 30 to 20,000 characters. The sample parser is available; the AI parser is recognized but returns 503 while AI is unconfigured.",
+        "summary": "Analyze a client request and return a reviewable scope without estimating it",
+        "description": "Next.js BFF. Accepts pasted text or supported files and returns source-linked analysis. The estimator is not called until the reviewer confirms the edited scope through /api/v1/preview/estimate.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PreviewRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/PreviewRequest"
+              }
+            },
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewFileRequest"
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Brief scope and deterministic effort estimate.",
+            "description": "Extracted source, agent steps, and editable findings. No effort estimate has been calculated.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PreviewResponse" }
+                "schema": {
+                  "$ref": "#/components/schemas/PreviewResponse"
+                }
               }
             }
           },
           "400": {
-            "description": "Malformed JSON, a non-object body, an invalid brief, or an unsupported parser value.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+            "description": "Malformed input or invalid parser/capability fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           },
           "413": {
-            "description": "Request body exceeds 100,000 bytes.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+            "description": "JSON request or uploaded file exceeds its size limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Unsupported request content type or uploaded file type.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           },
           "422": {
-            "description": "A downstream service rejects the brief or estimate request.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+            "description": "A downstream service rejects the request or no reviewable work items were extracted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           },
           "503": {
-            "description": "AI parsing is unconfigured or a preview service is unavailable or times out.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+            "description": "AI is unavailable, or the analysis service is unavailable or timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           }
         }
       }
@@ -90,32 +169,68 @@
     "/v1/briefs/analyze": {
       "post": {
         "operationId": "analyzeBrief",
-        "summary": "Extract a source-linked integration scope from a brief",
-        "description": "Python FastAPI endpoint. The request model requires a brief between 30 and 20,000 characters. The parser field defaults to sample; any parser value other than sample returns 503.",
+        "summary": "Analyze pasted text for source-linked work scope, missing information, and capabilities",
+        "description": "Python FastAPI endpoint. Accepts 30 to 20,000 characters and an optional team capability profile. Sample rules are local; AI mode runs a bounded specialist-agent analysis and verifies source evidence.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/BriefAnalyzeRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/BriefAnalyzeRequest"
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Extracted scope and initial answers.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Scope" } } }
+            "description": "Source-linked scope, risks, capability findings, analysis trace, and source metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scope"
+                }
+              }
+            }
           },
           "422": {
-            "description": "Invalid request fields or an unsupported data-import/integration brief.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PythonError" } } }
+            "description": "Invalid request fields or unsupported parser.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
           },
           "503": {
-            "description": "Requested parser is not configured; choose sample.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PythonError" } } }
+            "description": "AI mode is not configured or the provider permissions are unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
           },
           "504": {
             "description": "Brief analysis exceeded the bounded request deadline.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PythonError" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model provider or structured analysis failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
           }
         }
       }
@@ -129,26 +244,279 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/EstimateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/EstimateRequest"
+              }
             }
           }
         },
         "responses": {
           "200": {
             "description": "Task-level effort, planning range, assumptions, matched examples, and provenance.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Estimate" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
           },
           "400": {
             "description": "Malformed JSON, unknown JSON fields, or a request body that cannot be decoded.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
           },
           "422": {
             "description": "Invalid answers, history policy, requested requirement category, or exclusion category.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
           },
           "503": {
             "description": "Estimate exceeded the bounded request deadline.",
-            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/briefs/analyze-document": {
+      "post": {
+        "operationId": "analyzeClientDocument",
+        "summary": "Extract and analyze a supported client document",
+        "description": "Python FastAPI multipart endpoint. Reads PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files locally, with a 10 MiB upload limit and bounded extracted text. Scanned PDFs without text are rejected with a clear extraction error.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/BriefDocumentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Extracted document metadata and the same reviewable analysis result as pasted text.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Scope"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Upload, archive expansion, or page count exceeds the bounded limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "File extension is not supported.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unreadable, malformed, scanned, or invalid document or request fields.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "The model provider or structured analysis failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI mode is not configured or the provider permissions are unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "Document analysis exceeded the bounded request deadline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/estimates/general": {
+      "post": {
+        "operationId": "createGeneralWorkEstimate",
+        "summary": "Create an explicitly uncalibrated general-work planning range",
+        "description": "Go estimator endpoint for non-integration work packages. It maps human-reviewable small/moderate/complex bands to documented planning priors; it does not use synthetic or recorded delivery calibration.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GeneralEstimateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Work-package planning ranges, assumptions, and uncalibrated provenance.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed JSON, unknown JSON fields, or a request body that cannot be decoded.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid work package count, title, ID, or complexity band.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Estimate exceeded the bounded request deadline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GoError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/preview/estimate": {
+      "post": {
+        "operationId": "estimateReviewedScope",
+        "summary": "Estimate only after explicit scope review and confirmation",
+        "description": "Next.js BFF. Requires reviewConfirmed=true, at least one reviewed work item, a supported estimate path, and exact evidence quotes found in the extracted source. Routes integrations to the integration estimator and other work to the explicitly uncalibrated general estimator.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EstimateConfirmationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Planning estimate for the explicitly confirmed scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EstimateConfirmationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing explicit scope confirmation or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Confirmation payload exceeds its bounded size.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "415": {
+            "description": "Confirmation request must use JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "The reviewed scope is invalid or a source quote cannot be verified.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Estimator service is unavailable or timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           }
         }
       }
@@ -158,79 +526,157 @@
     "schemas": {
       "HealthLive": {
         "type": "object",
-        "properties": { "status": { "const": "ok" } },
-        "required": ["status"],
+        "properties": {
+          "status": {
+            "const": "ok"
+          }
+        },
+        "required": [
+          "status"
+        ],
         "additionalProperties": false
       },
       "HealthReady": {
         "oneOf": [
-          { "$ref": "#/components/schemas/WebServiceReady" },
-          { "$ref": "#/components/schemas/BriefServiceReady" },
-          { "$ref": "#/components/schemas/EstimatorServiceReady" }
+          {
+            "$ref": "#/components/schemas/WebServiceReady"
+          },
+          {
+            "$ref": "#/components/schemas/BriefServiceReady"
+          },
+          {
+            "$ref": "#/components/schemas/EstimatorServiceReady"
+          }
         ]
       },
       "WebServiceReady": {
         "type": "object",
         "properties": {
-          "status": { "const": "ready" },
-          "service": { "const": "web" }
+          "status": {
+            "const": "ready"
+          },
+          "service": {
+            "const": "web"
+          }
         },
-        "required": ["status", "service"],
+        "required": [
+          "status",
+          "service"
+        ],
         "additionalProperties": false
       },
       "WebServiceNotReady": {
         "type": "object",
         "properties": {
-          "status": { "const": "not_ready" },
-          "service": { "const": "web" }
+          "status": {
+            "const": "not_ready"
+          },
+          "service": {
+            "const": "web"
+          }
         },
-        "required": ["status", "service"],
+        "required": [
+          "status",
+          "service"
+        ],
         "additionalProperties": false
       },
       "BriefServiceReady": {
         "type": "object",
         "properties": {
-          "status": { "const": "ready" },
-          "parser": { "const": "sample" }
+          "status": {
+            "const": "ready"
+          },
+          "parser": {
+            "const": "sample"
+          },
+          "aiAvailable": {
+            "type": "boolean"
+          }
         },
-        "required": ["status", "parser"],
+        "required": [
+          "status",
+          "parser",
+          "aiAvailable"
+        ],
         "additionalProperties": false
       },
       "EstimatorServiceReady": {
         "type": "object",
         "properties": {
-          "status": { "const": "ready" },
-          "engine": { "const": "integration-effort/2.0" }
+          "status": {
+            "const": "ready"
+          },
+          "engine": {
+            "const": "integration-effort/2.0"
+          }
         },
-        "required": ["status", "engine"],
+        "required": [
+          "status",
+          "engine"
+        ],
         "additionalProperties": false
       },
       "PreviewRequest": {
         "type": "object",
         "properties": {
-          "brief": { "$ref": "#/components/schemas/Brief" },
+          "brief": {
+            "$ref": "#/components/schemas/Brief"
+          },
           "parser": {
             "type": "string",
-            "enum": ["sample", "ai"],
-            "default": "sample",
-            "description": "ai is recognized by the BFF but returns 503 until hosted AI is configured."
+            "enum": [
+              "sample",
+              "ai"
+            ],
+            "default": "ai"
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "maxItems": 30,
+            "default": []
           }
         },
-        "required": ["brief"],
-        "additionalProperties": true
+        "required": [
+          "brief"
+        ],
+        "additionalProperties": false
       },
       "BriefAnalyzeRequest": {
         "type": "object",
         "properties": {
-          "brief": { "$ref": "#/components/schemas/Brief" },
+          "brief": {
+            "$ref": "#/components/schemas/Brief"
+          },
           "parser": {
             "type": "string",
             "default": "sample",
-            "description": "Only sample is implemented; other strings return HTTP 503."
+            "description": "sample runs deterministic local rules; ai runs the optional specialist-agent analysis.",
+            "enum": [
+              "sample",
+              "ai"
+            ]
+          },
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 160
+            },
+            "maxItems": 30,
+            "default": []
           }
         },
-        "required": ["brief"],
-        "additionalProperties": true
+        "required": [
+          "brief"
+        ],
+        "additionalProperties": false
       },
       "Brief": {
         "type": "string",
@@ -240,193 +686,487 @@
       "EstimateRequest": {
         "type": "object",
         "properties": {
-          "scope": { "$ref": "#/components/schemas/EstimateScopeInput" },
-          "answers": { "$ref": "#/components/schemas/Answers" },
+          "scope": {
+            "$ref": "#/components/schemas/EstimateScopeInput"
+          },
+          "answers": {
+            "$ref": "#/components/schemas/Answers"
+          },
           "excluded": {
             "type": "array",
-            "items": { "$ref": "#/components/schemas/Category" },
+            "items": {
+              "$ref": "#/components/schemas/Category"
+            },
             "default": []
           },
           "historyPolicy": {
             "type": "string",
-            "enum": ["demo", "recorded"],
+            "enum": [
+              "demo",
+              "recorded"
+            ],
             "default": "demo"
           }
         },
-        "required": ["answers"],
+        "required": [
+          "answers"
+        ],
         "additionalProperties": false
       },
       "EstimateScopeInput": {
         "type": "object",
         "properties": {
-          "summary": { "type": "string" },
-          "requirements": { "type": "array", "items": { "$ref": "#/components/schemas/ScopeRequirementInput" } },
-          "initialAnswers": { "$ref": "#/components/schemas/ScopeInitialAnswers" },
-          "risks": { "type": "array", "items": { "type": "string" } },
-          "parser": { "type": "string" }
+          "summary": {
+            "type": "string"
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRequirementInput"
+            }
+          },
+          "initialAnswers": {
+            "$ref": "#/components/schemas/ScopeInitialAnswers"
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parser": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       },
       "ScopeRequirementInput": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "#/components/schemas/Category" },
-          "title": { "type": "string" },
-          "evidence": { "type": "string" }
+          "id": {
+            "$ref": "#/components/schemas/Category"
+          },
+          "title": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
         },
-        "required": ["id"],
+        "required": [
+          "id"
+        ],
         "additionalProperties": false
       },
       "ScopeInitialAnswers": {
         "type": "object",
         "properties": {
-          "direction": { "type": "string" },
-          "api": { "type": "string" },
-          "quality": { "type": "string" },
-          "volume": { "type": "string" },
-          "mapping": { "type": "string" }
+          "direction": {
+            "type": "string"
+          },
+          "api": {
+            "type": "string"
+          },
+          "quality": {
+            "type": "string"
+          },
+          "volume": {
+            "type": "string"
+          },
+          "mapping": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       },
       "Answers": {
         "type": "object",
         "properties": {
-          "direction": { "type": "string", "enum": ["unknown", "one-way", "two-way"] },
-          "api": { "type": "string", "enum": ["unknown", "documented", "custom"] },
-          "quality": { "type": "string", "enum": ["unknown", "clean", "mixed"] },
-          "volume": { "type": "string", "enum": ["unknown", "small", "medium", "large"] },
-          "mapping": { "type": "string", "enum": ["unknown", "standard", "custom"] }
+          "direction": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "one-way",
+              "two-way"
+            ]
+          },
+          "api": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "documented",
+              "custom"
+            ]
+          },
+          "quality": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "clean",
+              "mixed"
+            ]
+          },
+          "volume": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "small",
+              "medium",
+              "large"
+            ]
+          },
+          "mapping": {
+            "type": "string",
+            "enum": [
+              "unknown",
+              "standard",
+              "custom"
+            ]
+          }
         },
-        "required": ["direction", "api", "quality", "volume", "mapping"],
+        "required": [
+          "direction",
+          "api",
+          "quality",
+          "volume",
+          "mapping"
+        ],
         "additionalProperties": false
       },
       "Category": {
         "type": "string",
-        "enum": ["discovery", "authentication", "mapping", "import", "sync", "deduplication", "testing", "handover"]
+        "enum": [
+          "discovery",
+          "authentication",
+          "mapping",
+          "import",
+          "sync",
+          "deduplication",
+          "testing",
+          "handover"
+        ]
       },
       "Requirement": {
         "type": "object",
         "properties": {
-          "id": { "$ref": "#/components/schemas/Category" },
-          "title": { "type": "string" },
-          "evidence": { "type": "string" }
+          "id": {
+            "$ref": "#/components/schemas/Category"
+          },
+          "title": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          }
         },
-        "required": ["id", "title", "evidence"],
+        "required": [
+          "id",
+          "title",
+          "evidence"
+        ],
         "additionalProperties": false
       },
       "Scope": {
         "type": "object",
         "properties": {
-          "summary": { "type": "string" },
-          "requirements": { "type": "array", "items": { "$ref": "#/components/schemas/Requirement" } },
-          "initialAnswers": { "$ref": "#/components/schemas/Answers" },
-          "risks": { "type": "array", "items": { "type": "string" } },
-          "parser": { "type": "string" }
+          "summary": {
+            "type": "string"
+          },
+          "requirements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScopeRequirement"
+            }
+          },
+          "initialAnswers": {
+            "$ref": "#/components/schemas/Answers"
+          },
+          "risks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "parser": {
+            "type": "string",
+            "enum": [
+              "sample",
+              "ai"
+            ]
+          },
+          "domain": {
+            "type": "string"
+          },
+          "estimateMode": {
+            "type": "string",
+            "enum": [
+              "integration",
+              "general"
+            ]
+          },
+          "missingInformation": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MissingInformation"
+            }
+          },
+          "capabilityFindings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapabilityFinding"
+            }
+          },
+          "improvements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Improvement"
+            }
+          },
+          "qualityNotes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "agentRun": {
+            "$ref": "#/components/schemas/AgentRun"
+          },
+          "source": {
+            "$ref": "#/components/schemas/SourceMetadata"
+          },
+          "specialistSummaries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SpecialistSummary"
+            }
+          }
         },
-        "required": ["summary", "requirements", "initialAnswers", "risks", "parser"],
+        "required": [
+          "summary",
+          "requirements",
+          "initialAnswers",
+          "risks",
+          "parser",
+          "domain",
+          "estimateMode",
+          "missingInformation",
+          "capabilityFindings",
+          "improvements",
+          "qualityNotes",
+          "agentRun",
+          "source"
+        ],
         "additionalProperties": false
       },
       "PreviewResponse": {
         "type": "object",
         "properties": {
-          "scope": { "$ref": "#/components/schemas/Scope" },
-          "estimate": { "$ref": "#/components/schemas/Estimate" }
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
         },
-        "required": ["scope", "estimate"],
+        "required": [
+          "scope"
+        ],
         "additionalProperties": false
       },
       "Estimate": {
         "type": "object",
         "properties": {
-          "tasks": { "type": "array", "items": { "$ref": "#/components/schemas/TaskEstimate" } },
-          "low": { "type": "integer" },
-          "high": { "type": "integer" },
-          "hours": { "type": "number" },
-          "baseHours": { "type": "number" },
-          "blockers": { "type": "array", "items": { "type": "string" } },
-          "assumptions": { "type": "array", "items": { "type": "string" } },
-          "references": { "type": "array", "items": { "$ref": "#/components/schemas/Reference" } },
-          "provenance": { "$ref": "#/components/schemas/Provenance" }
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskEstimate"
+            }
+          },
+          "low": {
+            "type": "integer"
+          },
+          "high": {
+            "type": "integer"
+          },
+          "hours": {
+            "type": "number"
+          },
+          "baseHours": {
+            "type": "number"
+          },
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "assumptions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "references": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reference"
+            }
+          },
+          "provenance": {
+            "$ref": "#/components/schemas/Provenance"
+          }
         },
-        "required": ["tasks", "low", "high", "hours", "baseHours", "blockers", "assumptions", "references", "provenance"],
+        "required": [
+          "tasks",
+          "low",
+          "high",
+          "hours",
+          "baseHours",
+          "blockers",
+          "assumptions",
+          "references",
+          "provenance"
+        ],
         "additionalProperties": false
       },
       "TaskEstimate": {
         "type": "object",
         "properties": {
-          "category": { "$ref": "#/components/schemas/Category" },
-          "label": { "type": "string" },
-          "base": { "type": "number" },
-          "factor": { "type": "number" },
-          "hours": { "type": "number" },
-          "low": { "type": "integer" },
-          "high": { "type": "integer" },
-          "observations": { "type": "integer" },
-          "referenceIds": { "type": "array", "items": { "type": "string" } }
+          "category": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "base": {
+            "type": "number"
+          },
+          "factor": {
+            "type": "number"
+          },
+          "hours": {
+            "type": "number"
+          },
+          "low": {
+            "type": "integer"
+          },
+          "high": {
+            "type": "integer"
+          },
+          "observations": {
+            "type": "integer"
+          },
+          "referenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         },
-        "required": ["category", "label", "base", "factor", "hours", "low", "high", "observations", "referenceIds"],
+        "required": [
+          "category",
+          "label",
+          "base",
+          "factor",
+          "hours",
+          "low",
+          "high",
+          "observations",
+          "referenceIds"
+        ],
         "additionalProperties": false
       },
       "Reference": {
         "type": "object",
         "properties": {
-          "id": { "type": "string" },
-          "name": { "type": "string" },
-          "synthetic": { "type": "boolean" },
-          "score": { "type": "number" },
-          "hours": { "type": "number" },
-          "knownKeys": { "type": "array", "items": { "$ref": "#/components/schemas/AnswerKey" } },
-          "matchedKeys": { "type": "array", "items": { "$ref": "#/components/schemas/AnswerKey" } }
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "synthetic": {
+            "type": "boolean"
+          },
+          "score": {
+            "type": "number"
+          },
+          "hours": {
+            "type": "number"
+          },
+          "knownKeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnswerKey"
+            }
+          },
+          "matchedKeys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AnswerKey"
+            }
+          }
         },
-        "required": ["id", "name", "synthetic", "score", "hours", "knownKeys", "matchedKeys"],
+        "required": [
+          "id",
+          "name",
+          "synthetic",
+          "score",
+          "hours",
+          "knownKeys",
+          "matchedKeys"
+        ],
         "additionalProperties": false
       },
       "AnswerKey": {
         "type": "string",
-        "enum": ["direction", "api", "quality", "volume", "mapping"]
+        "enum": [
+          "direction",
+          "api",
+          "quality",
+          "volume",
+          "mapping"
+        ]
       },
       "Provenance": {
-        "type": "object",
-        "properties": {
-          "engineVersion": { "type": "string" },
-          "historyPolicy": { "type": "string", "enum": ["demo", "recorded"] },
-          "similarityThreshold": { "type": "number" },
-          "priorObservations": { "type": "integer" },
-          "ratioBounds": { "type": "array", "items": { "type": "number" }, "minItems": 2, "maxItems": 2 },
-          "driverWeights": {
-            "type": "object",
-            "properties": {
-              "direction": { "type": "number" },
-              "api": { "type": "number" },
-              "quality": { "type": "number" },
-              "volume": { "type": "number" },
-              "mapping": { "type": "number" }
-            },
-            "required": ["direction", "api", "quality", "volume", "mapping"],
-            "additionalProperties": false
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/IntegrationProvenance"
           },
-          "referenceIds": { "type": "array", "items": { "type": "string" } }
-        },
-        "required": ["engineVersion", "historyPolicy", "similarityThreshold", "priorObservations", "ratioBounds", "driverWeights", "referenceIds"],
-        "additionalProperties": false
+          {
+            "$ref": "#/components/schemas/GeneralProvenance"
+          }
+        ]
       },
       "BFFError": {
         "type": "object",
         "properties": {
           "error": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "$ref": "#/components/schemas/ValidationError" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
             ]
           }
         },
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "additionalProperties": false
       },
       "GoError": {
         "type": "object",
-        "properties": { "error": { "type": "string" } },
-        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "error"
+        ],
         "additionalProperties": false
       },
       "PythonError": {
@@ -434,23 +1174,541 @@
         "properties": {
           "detail": {
             "oneOf": [
-              { "type": "string" },
-              { "type": "array", "items": { "$ref": "#/components/schemas/ValidationError" } }
+              {
+                "type": "string"
+              },
+              {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ValidationError"
+                }
+              }
             ]
           }
         },
-        "required": ["detail"],
+        "required": [
+          "detail"
+        ],
         "additionalProperties": true
       },
       "ValidationError": {
         "type": "object",
         "properties": {
-          "loc": { "type": "array", "items": { "type": ["string", "integer"] } },
-          "msg": { "type": "string" },
-          "type": { "type": "string" }
+          "loc": {
+            "type": "array",
+            "items": {
+              "type": [
+                "string",
+                "integer"
+              ]
+            }
+          },
+          "msg": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          }
         },
-        "required": ["loc", "msg", "type"],
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
         "additionalProperties": true
+      },
+      "PreviewFileRequest": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "parser": {
+            "type": "string",
+            "enum": [
+              "sample",
+              "ai"
+            ],
+            "default": "ai"
+          },
+          "capabilities": {
+            "type": "string",
+            "description": "JSON-encoded array of up to 30 team capability strings."
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "additionalProperties": false
+      },
+      "BriefDocumentRequest": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "format": "binary"
+          },
+          "parser": {
+            "type": "string",
+            "enum": [
+              "sample",
+              "ai"
+            ],
+            "default": "sample"
+          },
+          "capabilities": {
+            "type": "string",
+            "description": "JSON-encoded array of up to 30 team capability strings."
+          }
+        },
+        "required": [
+          "file"
+        ],
+        "additionalProperties": false
+      },
+      "ScopeRequirement": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "title": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "evidenceStatus": {
+            "type": "string",
+            "enum": [
+              "verified",
+              "needs_review"
+            ],
+            "description": "Server-checked exact source quote status. needs_review findings remain provisional until corrected or removed."
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "small",
+              "moderate",
+              "complex"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "evidence",
+          "evidenceStatus"
+        ],
+        "additionalProperties": false
+      },
+      "MissingInformation": {
+        "type": "object",
+        "properties": {
+          "question": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          }
+        },
+        "required": [
+          "question",
+          "reason",
+          "priority"
+        ],
+        "additionalProperties": false
+      },
+      "CapabilityFinding": {
+        "type": "object",
+        "properties": {
+          "capability": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "match",
+              "gap",
+              "unknown"
+            ]
+          },
+          "evidence": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "capability",
+          "status",
+          "evidence",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "Improvement": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "high",
+              "medium",
+              "low"
+            ]
+          }
+        },
+        "required": [
+          "title",
+          "reason",
+          "priority"
+        ],
+        "additionalProperties": false
+      },
+      "AgentStep": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "agent": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "agent",
+          "status",
+          "summary"
+        ],
+        "additionalProperties": false
+      },
+      "AgentRun": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "elapsedMs": {
+            "type": "integer"
+          },
+          "subagentCount": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AgentStep"
+            }
+          },
+          "sessionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "model",
+          "elapsedMs",
+          "subagentCount",
+          "steps"
+        ],
+        "additionalProperties": false
+      },
+      "SourceMetadata": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "characters": {
+            "type": "integer"
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "reviewText": {
+            "type": "string",
+            "maxLength": 20000,
+            "description": "Bounded extracted source shown to the reviewer; used to verify edited evidence before an estimate is calculated."
+          }
+        },
+        "required": [
+          "name",
+          "type",
+          "characters",
+          "truncated",
+          "reviewText"
+        ],
+        "additionalProperties": false
+      },
+      "SpecialistSummary": {
+        "type": "object",
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "scope analyst",
+              "delivery risk analyst",
+              "capability analyst"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "role",
+          "summary"
+        ],
+        "additionalProperties": false
+      },
+      "GeneralEstimateRequest": {
+        "type": "object",
+        "properties": {
+          "workPackages": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 30,
+            "items": {
+              "$ref": "#/components/schemas/GeneralWorkPackage"
+            }
+          }
+        },
+        "required": [
+          "workPackages"
+        ],
+        "additionalProperties": false
+      },
+      "GeneralWorkPackage": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 80
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 240
+          },
+          "complexity": {
+            "type": "string",
+            "enum": [
+              "small",
+              "moderate",
+              "complex"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "complexity"
+        ],
+        "additionalProperties": false
+      },
+      "IntegrationProvenance": {
+        "type": "object",
+        "properties": {
+          "engineVersion": {
+            "type": "string"
+          },
+          "historyPolicy": {
+            "type": "string",
+            "enum": [
+              "demo",
+              "recorded"
+            ]
+          },
+          "similarityThreshold": {
+            "type": "number"
+          },
+          "priorObservations": {
+            "type": "integer"
+          },
+          "ratioBounds": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "driverWeights": {
+            "type": "object",
+            "properties": {
+              "direction": {
+                "type": "number"
+              },
+              "api": {
+                "type": "number"
+              },
+              "quality": {
+                "type": "number"
+              },
+              "volume": {
+                "type": "number"
+              },
+              "mapping": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "direction",
+              "api",
+              "quality",
+              "volume",
+              "mapping"
+            ],
+            "additionalProperties": false
+          },
+          "referenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "engineVersion",
+          "historyPolicy",
+          "similarityThreshold",
+          "priorObservations",
+          "ratioBounds",
+          "driverWeights",
+          "referenceIds"
+        ],
+        "additionalProperties": false
+      },
+      "GeneralProvenance": {
+        "type": "object",
+        "properties": {
+          "engineVersion": {
+            "type": "string"
+          },
+          "mode": {
+            "const": "general"
+          },
+          "dataBasis": {
+            "type": "string"
+          },
+          "referenceIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "complexityBands": {
+            "type": "object",
+            "properties": {
+              "small": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "moderate": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              },
+              "complex": {
+                "type": "array",
+                "items": {
+                  "type": "number"
+                },
+                "minItems": 3,
+                "maxItems": 3
+              }
+            },
+            "required": [
+              "small",
+              "moderate",
+              "complex"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "engineVersion",
+          "mode",
+          "dataBasis",
+          "referenceIds",
+          "complexityBands"
+        ],
+        "additionalProperties": false
+      },
+      "EstimateConfirmationRequest": {
+        "type": "object",
+        "properties": {
+          "reviewConfirmed": {
+            "const": true
+          },
+          "scope": {
+            "$ref": "#/components/schemas/Scope"
+          }
+        },
+        "required": [
+          "reviewConfirmed",
+          "scope"
+        ],
+        "additionalProperties": false
+      },
+      "EstimateConfirmationResponse": {
+        "type": "object",
+        "properties": {
+          "estimate": {
+            "$ref": "#/components/schemas/Estimate"
+          }
+        },
+        "required": [
+          "estimate"
+        ],
+        "additionalProperties": false
       }
     }
   }

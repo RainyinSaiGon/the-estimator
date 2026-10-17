@@ -8,10 +8,14 @@ import sys
 import time
 import uuid
 from datetime import datetime, timezone
+from pathlib import PurePosixPath
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
+
+from agent_runtime import run_agent_analysis
+from document_ingest import MAX_UPLOAD_BYTES, extract_document
 
 
 def _request_timeout_seconds() -> float:
@@ -19,9 +23,9 @@ def _request_timeout_seconds() -> float:
     try:
         value = float(raw)
     except ValueError as error:
-        raise RuntimeError("REQUEST_TIMEOUT_SECONDS must be between 1 and 30.") from error
-    if not math.isfinite(value) or not 1 <= value <= 30:
-        raise RuntimeError("REQUEST_TIMEOUT_SECONDS must be between 1 and 30.")
+        raise RuntimeError("REQUEST_TIMEOUT_SECONDS must be between 1 and 45.") from error
+    if not math.isfinite(value) or not 1 <= value <= 45:
+        raise RuntimeError("REQUEST_TIMEOUT_SECONDS must be between 1 and 45.")
     return value
 
 
@@ -128,9 +132,16 @@ app.add_middleware(OperationsMiddleware)
 class AnalyzeRequest(BaseModel):
     brief: str = Field(min_length=30, max_length=20_000)
     parser: str = "sample"
+    capabilities: list[str] = Field(default_factory=list, max_length=30)
 
 
-def sample_scope(brief: str) -> dict:
+def validate_capabilities(values: list[str]) -> list[str]:
+    if len(values) > 30 or any(not isinstance(item, str) or not item.strip() or len(item.strip()) > 160 for item in values):
+        raise HTTPException(status_code=422, detail="Provide up to 30 non-empty team capabilities of 160 characters or fewer.")
+    return [item.strip() for item in values]
+
+
+def sample_scope(brief: str, team_capabilities: list[str] | None = None) -> dict:
     lines = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", brief) if part.strip()]
 
     def evidence(pattern: str) -> str:
@@ -139,8 +150,7 @@ def sample_scope(brief: str) -> dict:
     migration = evidence(r"\b(csv|migrat\w*|import\w*|historical|legacy)\b")
     sync = evidence(r"\b(sync\w*|nightly|every night|integrat\w*|connect\w*)\b")
     dedup = evidence(r"\b(duplicat\w*|dedup\w*|reconcil\w*)\b")
-    if not migration and not sync:
-        raise HTTPException(status_code=422, detail="This MVP supports data imports and CRM / API integrations. Describe the import or integration you need.")
+    integration = bool(migration or sync or re.search(r"\b(api|crm|database|data|system|software|website|application|automate|workflow|report|dashboard|design|develop|build|launch|configure|analy[sz]e|research|audit|train|support|deploy)\b", brief, re.IGNORECASE))
 
     answers = {"direction": "unknown", "api": "unknown", "quality": "unknown", "volume": "unknown", "mapping": "unknown"}
     if re.search(r"two.way|bi.?directional|both directions", brief, re.IGNORECASE):
@@ -154,23 +164,98 @@ def sample_scope(brief: str) -> dict:
         count = int(match.group(1).replace(",", ""))
         answers["volume"] = "small" if count < 10_000 else "medium" if count <= 100_000 else "large"
 
-    requirements = [{"id": "mapping", "title": "Map records to destination fields", "evidence": migration or sync}]
-    if migration:
-        requirements.append({"id": "import", "title": "Import historical records", "evidence": migration})
-    if sync:
-        requirements.append({"id": "sync", "title": "Connect systems and synchronize updates", "evidence": sync})
-    if dedup:
-        requirements.append({"id": "deduplication", "title": "Detect duplicates and reconcile records", "evidence": dedup})
+    requirements = []
+    if migration or sync:
+        requirements.append({"id": "mapping", "title": "Map records to destination fields", "evidence": migration or sync})
+        if migration:
+            requirements.append({"id": "import", "title": "Import historical records", "evidence": migration})
+        if sync:
+            requirements.append({"id": "sync", "title": "Connect systems and synchronize updates", "evidence": sync})
+        if dedup:
+            requirements.append({"id": "deduplication", "title": "Detect duplicates and reconcile records", "evidence": dedup})
+    else:
+        action_pattern = r"\b(build|create|design|develop|implement|automate|configure|migrate|analy[sz]e|research|audit|integrate|launch|deploy|train|support|improve|review|deliver|prepare|produce|connect|update)\b"
+        for index, line in enumerate(lines):
+            if re.search(action_pattern, line, re.IGNORECASE):
+                requirements.append({"id": f"work-{index + 1}", "title": line[:180], "evidence": line, "complexity": "complex" if re.search(r"\b(multiple|custom|enterprise|high-volume|regulated|security|complex)\b", line, re.IGNORECASE) else "moderate"})
+        requirements = requirements[:20]
+    if not requirements:
+        first = lines[0] if lines else brief[:300]
+        requirements.append({"id": "work-1", "title": "Clarify the requested outcome", "evidence": first, "complexity": "moderate"})
+    for requirement in requirements:
+        requirement["evidenceStatus"] = "verified"
+
+    gaps = []
+    for key, pattern, question, reason in [
+        ("outcome", r"\b(success|acceptance|outcome|done when|measure|kpi)\b", "What outcome or acceptance criteria will define success?", "No measurable success criteria were found in the request."),
+        ("users", r"\b(users|customers|teams|records|rows|volume|traffic)\b", "Who will use this and at what scale?", "User groups and scale are unclear."),
+        ("dependencies", r"\b(api|access|documentation|credentials|vendor|dependency|environment)\b", "Which systems, access, and dependencies will be available?", "Required access or dependency details are not stated."),
+        ("deadline", r"\b(by|deadline|due|launch|within|weeks?|months?)\b", "Is there a target date and what is driving it?", "No delivery date or business constraint was confirmed."),
+    ]:
+        if not re.search(pattern, brief, re.IGNORECASE):
+            gaps.append({"question": question, "reason": reason, "priority": "high" if key in {"outcome", "dependencies"} else "medium"})
+
+    capability_profile = team_capabilities or []
+    capabilities = [
+        {"capability": item, "status": "unknown", "evidence": "", "note": "The sample rules do not assess team fit; choose AI analysis for a profile comparison."}
+        for item in capability_profile[:10]
+    ] or [
+        {"capability": "Team profile not provided", "status": "unknown", "evidence": "", "note": "Add verified team capabilities before assessing team fit."}
+    ]
+    improvements = [{"title": item["question"], "reason": item["reason"], "priority": item["priority"]} for item in gaps[:5]]
     return {
-        "summary": "Deliver a reliable connection between client systems and clean, reusable customer data.",
+        "summary": "A preliminary view of the client's requested outcomes. Review each item and evidence before estimating.",
         "requirements": requirements,
         "initialAnswers": answers,
-        "risks": [
-            "Acceptance criteria and field mappings need delivery review.",
-            "The client's requested date is a constraint, not a confirmed delivery commitment.",
-        ],
-        "parser": "demo",
+        "risks": [item["reason"] for item in gaps],
+        "parser": "sample",
+        "domain": "software and data integration" if integration else "general client work",
+        "estimateMode": "integration" if migration or sync else "general",
+        "missingInformation": gaps,
+        "capabilityFindings": capabilities,
+        "improvements": improvements,
+        "qualityNotes": ["Sample parser uses deterministic rules; model inference is disabled for this run."],
+        "agentRun": {
+            "mode": "sample-rules",
+            "model": None,
+            "sessionId": None,
+            "elapsedMs": 0,
+            "subagentCount": 0,
+            "steps": [
+                {"id": "intake", "agent": "Intake analyst", "status": "complete", "summary": "Read pasted request text; no files were uploaded."},
+                {"id": "scope", "agent": "Scope analyst", "status": "complete", "summary": f"Extracted {len(requirements)} candidate work item(s) with source passages."},
+                {"id": "risk", "agent": "Delivery risk analyst", "status": "complete", "summary": f"Flagged {len(gaps)} missing-information question(s)."},
+                {"id": "capability", "agent": "Capability analyst", "status": "not-run", "summary": "Sample rules do not analyze team capability; findings remain unknown."},
+            ],
+        },
     }
+
+
+def normalize_agent_result(result: dict) -> dict:
+    result["parser"] = "ai"
+    result["risks"] = [item["reason"] for item in result["missingInformation"]]
+    if result["estimateMode"] == "integration":
+        category_map = {
+            "api": "authentication", "authentication": "authentication", "mapping": "mapping",
+            "import": "import", "migration": "import", "sync": "sync", "synchronization": "sync",
+            "deduplication": "deduplication", "testing": "testing", "handover": "handover", "discovery": "discovery",
+        }
+        result["requirements"] = [
+            {"id": category_map.get(item["category"].lower(), "discovery"), "title": item["title"], "evidence": item["evidence"]}
+            for item in result["requirements"]
+        ]
+    else:
+        seen: set[str] = set()
+        for item in result["requirements"]:
+            base_id = re.sub(r"[^a-zA-Z0-9-]+", "-", item["id"]).strip("-")[:64] or "work"
+            candidate = base_id
+            suffix = 2
+            while candidate in seen:
+                candidate = f"{base_id[:58]}-{suffix}"
+                suffix += 1
+            item["id"] = candidate
+            seen.add(candidate)
+    return result
 
 
 @app.get("/health/live")
@@ -180,14 +265,61 @@ def live():
 
 @app.get("/health/ready")
 def ready():
-    return {"status": "ready", "parser": "sample"}
+    return {"status": "ready", "parser": "sample", "aiAvailable": bool(os.environ.get("OPENAI_API_KEY", "").strip())}
 
 
 @app.post("/v1/briefs/analyze")
 def analyze(request: AnalyzeRequest):
-    if request.parser != "sample":
-        raise HTTPException(status_code=503, detail="AI parsing is not configured. Choose the sample parser.")
-    return sample_scope(request.brief)
+    capabilities = validate_capabilities(request.capabilities)
+    if request.parser == "sample":
+        result = sample_scope(request.brief, capabilities)
+        result["source"] = {"name": "Pasted request", "type": "text", "characters": len(request.brief), "truncated": False, "reviewText": request.brief}
+        return result
+    if request.parser != "ai":
+        raise HTTPException(status_code=422, detail="Choose the sample or AI analysis mode.")
+    try:
+        result = normalize_agent_result(run_agent_analysis(request.brief, capabilities))
+        result["source"] = {"name": "Pasted request", "type": "text", "characters": len(request.brief), "truncated": False, "reviewText": request.brief}
+        return result
+    except RuntimeError as error:
+        message = str(error)
+        status = 503 if "not configured" in message or "permissions" in message else 502
+        raise HTTPException(status_code=status, detail=message) from error
+    except ValueError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/v1/briefs/analyze-document")
+async def analyze_document(file: UploadFile = File(...), parser: str = Form("sample"), capabilities: str = Form("[]")):
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    extracted = extract_document(PurePosixPath((file.filename or "client-file").replace("\\", "/")).name, raw)
+    try:
+        capability_profile = json.loads(capabilities)
+        if not isinstance(capability_profile, list) or any(not isinstance(item, str) for item in capability_profile):
+            raise ValueError("Capabilities must be a list of text values.")
+    except (json.JSONDecodeError, ValueError) as error:
+        raise HTTPException(status_code=422, detail="Team capabilities must be valid JSON text.") from error
+    capability_profile = validate_capabilities(capability_profile)
+    brief = str(extracted["text"])
+    if parser == "sample":
+        result = sample_scope(brief, capability_profile)
+    elif parser == "ai":
+        try:
+            result = normalize_agent_result(await asyncio.to_thread(
+                run_agent_analysis,
+                brief,
+                capability_profile,
+                str(file.filename or "Client file"),
+                str(extracted["extension"]),
+            ))
+        except (RuntimeError, ValueError) as error:
+            status = 503 if "not configured" in str(error) or "permissions" in str(error) else 502
+            raise HTTPException(status_code=status, detail=str(error)) from error
+    else:
+        raise HTTPException(status_code=422, detail="Choose the sample or AI analysis mode.")
+    result["source"] = {"name": PurePosixPath((file.filename or "Client file").replace("\\", "/")).name[:120], "type": extracted["extension"], "characters": len(brief), "truncated": extracted["truncated"], "reviewText": brief}
+    result["agentRun"]["steps"][0]["summary"] = f"Extracted {len(brief):,} characters from {result['source']['name']}."
+    return result
 
 
 def main() -> None:

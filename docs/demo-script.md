@@ -29,3 +29,16 @@ Use a fictional CRM request; the example is not real client data. Start with the
 - Open the public overview, sign in to a separate private workspace, and confirm judge access.
 - Submit https://github.com/RainyinSaiGon/the-estimator as the public source repository.
 - Check an unfamiliar brief, source evidence, failed-provider behavior and the complete delivery cycle once more after any material changes.
+
+## Local agent-led preview
+
+The separate Next.js/Python/Go preview is not the hosted workspace and saves no requests. Run it with Compose. To demonstrate the model path, use fictional material and provide the existing local key to the Python service with `docker compose --env-file .env.local up --build`.
+
+1. Open `http://127.0.0.1:3000/estimate` and use **Load fictional CRM sample**.
+2. Keep **AI specialist agents** selected and click **Analyze and review**. Explain that analysis returns no estimate yet, and that request text and the optional capability profile go to OpenAI only for this choice.
+3. Inspect the extracted source and named intake, scope, delivery-risk, capability, and evidence-review steps. Check the source quotes, missing questions, and any unknown team fit.
+4. Edit a work-item title, remove a finding, and correct a quote. Confirm that unsupported quotes cannot reach the estimator. Add only verified team capabilities, then analyze again to compare the fit findings.
+5. Check the scope confirmation control and click **Confirm scope & estimate**. Show the separate estimate request, its task breakdown, assumptions, and evidence basis. Explain that the model does not generate hours.
+6. Run the same scenario with **Sample rules** and explain that it makes no provider call. Use a fictional non-integration brief to demonstrate the general-work path; its complexity bands are uncalibrated planning priors, not learned predictions.
+7. Upload a supported fictional PDF, Word, spreadsheet, slide, CSV, text, Markdown, JSON, or email file and show its extraction metadata. Scanned-only PDFs and unsupported formats are reported rather than treated as analyzed.
+8. State that the local preview is ephemeral. Do not submit confidential client content or present the preview as the authenticated private workspace.

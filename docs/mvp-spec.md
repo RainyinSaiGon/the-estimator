@@ -3,6 +3,8 @@
 ## Problem and target
 Delivery leads and presales engineers interpret vague software integration briefs before committing to a client. The supplied challenge describes slow, inconsistent scoping and estimates that never learn from actual effort. The user chose software and data integration work; this MVP covers CRM/API synchronization and CSV imports.
 
+The broader product direction is tracked in [Epic #19](https://github.com/RainyinSaiGon/the-estimator/issues/19): accept varied client materials, orchestrate reviewable specialist analysis for scope, unknowns, risks, and team fit, and improve from delivery outcomes. The first Next.js/Python/Go preview implements only a local, ephemeral vertical slice; it is not the authenticated production workspace.
+
 ## Goals and evidence
 - A judge can finish brief → questions → estimate → reviewed baseline → actual hours → next-estimate preview in one browser session.
 - Each extracted requirement links to an exact passage of the client brief; every passage is checked in code.
@@ -38,9 +40,9 @@ Delivery leads and presales engineers interpret vague software integration brief
 - Project payloads use schema version 2. Legacy live fields receive explicit defaults; old snapshot fields and values remain unchanged and missing provenance is labelled unknown.
 
 ## Later and non-goals
-Later: history CSV import, PDF extraction, editing/re-analyzing source documents, and representative independent accuracy evaluation. Existing illustrative outcomes do not establish real-world prediction accuracy.
+The hosted integration workflow still needs reviewed history CSV import, source-document editing/re-analysis, and representative independent accuracy evaluation. The local preview now accepts bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML intake and offers general-work complexity bands; these bands are uncalibrated and the local request is not stored. Scanned PDFs need OCR, and unsupported formats are rejected clearly.
 
-This version does not build CRM connectors, autonomously commit to a client, send messages, bill clients, estimate arbitrary software domains or promise production accuracy from synthetic examples.
+The product does not build CRM connectors, autonomously commit to a client, send messages, bill clients, or promise accuracy from synthetic examples. Secure persistent intake for the new services requires authenticated per-user storage, retention and isolation work from Epic #4/#19 before production use.
 
 ## Architecture and calibration
 React/Vinext UI → authenticated API → Zod validation → source extraction and pure numeric engine → D1. AI reads requirements but never invents numeric hours. Server-side schema validation and exact evidence checks constrain model output. Provider failures are visible. Only server runtime reads the API key.

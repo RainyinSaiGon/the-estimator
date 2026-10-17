@@ -31,7 +31,15 @@ Use Docker Compose, which builds and starts the Next.js web app, Python brief se
 docker compose up --build
 ```
 
-The sample estimate is ephemeral. The brief service extracts source passages with deterministic rules; the Go service returns task hours, ranges, and blockers using synthetic demonstration history. AI parsing is unconfigured, and no records are stored.
+The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules; the Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. The local preview is ephemeral and stores no request or estimate records.
+
+For a local AI run, point Compose at an ignored file that contains `OPENAI_API_KEY` (the root `.env.local` is the local configuration file when present). The key is passed only to the Python service at runtime; it is not copied into the web container or image:
+
+```powershell
+docker compose --env-file .env.local up --build
+```
+
+The AI option runs the OpenAI Agents API with scope, delivery-risk, and capability specialists, followed by a source-evidence check. The user must select AI mode; provider errors do not switch to sample mode. The request text and any supplied team profile are sent to OpenAI for that run. The app deletes its agent session after completion, but this does not promise zero provider-side retention; use fictional or non-sensitive material in this local prototype. Reviewers can edit or remove findings, and the estimator is called only after they explicitly confirm the scope. Hosted AI and the public Site remain unchanged.
 
 For a source-based local development setup, use Node 22.13+, Go 1.26+, and Python 3.12+ in three terminals:
 
@@ -60,7 +68,7 @@ Apply that initial SQL file once per new local legacy database. It is already ap
 
 The legacy development server opens on `http://127.0.0.1:5173/`. The portable development server provides its documented local test identity. Production authentication is owned by Sites; records are scoped to the authenticated user's ID. The new preview does not use that persistence or authentication path.
 
-Only the legacy application reads `OPENAI_API_KEY` from ignored `.env.local` and optionally `OPENAI_MODEL`. The new Next.js preview does not load the local key or call an AI provider. Hosted AI remains unconfigured; never commit credentials.
+The Python service reads `OPENAI_API_KEY` and optional `AGENT_MODEL` from its process environment. The web app never reads or receives the provider key. The legacy application continues to use `OPENAI_API_KEY` and optional `OPENAI_MODEL` through its own runtime. Never commit credentials or place them in browser-visible variables.
 
 ## Validate the preview API contracts
 
@@ -75,7 +83,7 @@ python -m pip install -r services/brief-intelligence/requirements.txt -r contrac
 npm run check:contracts
 ```
 
-The check validates the OpenAPI document, builds and starts the local Go estimator and Python brief service on temporary loopback ports, and validates their real success and error JSON against the contract schemas. It also validates the BFF request and composed success payload. It needs Python 3.12+, Go 1.26+, and the listed local Python packages; it does not call external services or require credentials. See [contracts/README.md](contracts/README.md) for schema ownership and compatibility rules.
+The check validates the OpenAPI document, builds and starts the local Go estimator and Python brief service on temporary loopback ports, and validates their real success and error JSON against the contract schemas. It checks that analysis does not call Go, scope confirmation is required, source quotes are verified before estimation, and both integration and general-work estimates follow their documented contracts. It needs Python 3.12+, Go 1.26+, and the listed local Python packages; it does not call external services or require credentials. See [contracts/README.md](contracts/README.md) for schema ownership and compatibility rules.
 
 If a Windows package-manager shim fails, these direct entrypoints use the same project scripts:
 
@@ -106,8 +114,8 @@ Historical matches use weighted feature similarity of at least 0.45. Each task u
 
 ## Source map
 - `apps/web/app/`: native Next.js and Tailwind application, with `/estimate` and the preview BFF route.
-- `services/brief-intelligence/`: Python FastAPI sample parser and source-linked scope extraction.
-- `services/estimator-go/`: Go estimation engine and deterministic synthetic-history calibration.
+- `services/brief-intelligence/`: Python FastAPI document extraction, sample parser, and optional specialist-agent analysis.
+- `services/estimator-go/`: Go integration estimator and a separate uncalibrated general-work planning path.
 - `compose.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration.
 - `docs/service-operations.md`: health checks, structured request logs, timeout defaults and secret-loading rules.
 - `docs/adr/0001-next-go-python-first-slice.md`: service ownership, boundaries and migration constraints.
@@ -127,6 +135,6 @@ Historical matches use weighted feature similarity of at least 0.45. Each task u
 - `docs/mvp-spec.md`: scope, assumptions, acceptance criteria and remaining decisions.
 
 ## Submission status
-The official event page reviewed on 17 October 2026 gives a deadline of **19 October 2026, 23:59 Ho Chi Minh City time**. It requires a working hosted app and full source in a public GitHub repository. Full source is public at https://github.com/RainyinSaiGon/the-estimator. The public overview opens without signing in; each workspace requires sign-in and stores records by user. Hosted AI is intentionally unconfigured at the owner's request; use the labelled sample parser.
+The official event page reviewed on 17 October 2026 gives a deadline of **19 October 2026, 23:59 Ho Chi Minh City time**. It requires a working hosted app and full source in a public GitHub repository. Full source is public at https://github.com/RainyinSaiGon/the-estimator. The existing hosted Site remains the judge-facing app, with private authenticated workspaces. The new multi-service preview is local-only and ephemeral; its optional AI key is not configured in the hosted runtime. Use the labelled sample path for the hosted walkthrough.
 
 No real CRM credentials or client data are required to try the fictional scenario. This application estimates integration work; it does not execute CRM integrations or send client commitments.
