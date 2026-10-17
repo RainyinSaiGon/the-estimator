@@ -17,7 +17,8 @@
     "db:generate": "drizzle-kit generate",
     "test": "node --experimental-strip-types --test tests/*.test.mjs",
     "typecheck": "tsc --noEmit",
-    "check:secrets": "node scripts/check-secret-boundary.mjs"
+    "check:secrets": "node scripts/check-secret-boundary.mjs",
+    "check:contracts": "python scripts/validate_contracts.py"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

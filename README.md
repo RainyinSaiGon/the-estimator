@@ -62,6 +62,21 @@ The legacy development server opens on `http://127.0.0.1:5173/`. The portable de
 
 Only the legacy application reads `OPENAI_API_KEY` from ignored `.env.local` and optionally `OPENAI_MODEL`. The new Next.js preview does not load the local key or call an AI provider. Hosted AI remains unconfigured; never commit credentials.
 
+## Validate the preview API contracts
+
+`contracts/v1/openapi.json` describes the existing Next.js preview route and Python and Go service APIs. It records their current JSON field names, parser/history-policy values, request limits, and error responses. Contract edits should follow the owning endpoint's current behavior; a wire change needs a separate compatibility decision and coordinated service update.
+
+On Windows, from the repository root, install the Python service and contract-check dependencies in a virtual environment, then run the check:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -r services/brief-intelligence/requirements.txt -r contracts/requirements.txt
+npm run check:contracts
+```
+
+The check validates the OpenAPI document, builds and starts the local Go estimator and Python brief service on temporary loopback ports, and validates their real success and error JSON against the contract schemas. It also validates the BFF request and composed success payload. It needs Python 3.12+, Go 1.26+, and the listed local Python packages; it does not call external services or require credentials. See [contracts/README.md](contracts/README.md) for schema ownership and compatibility rules.
+
 If a Windows package-manager shim fails, these direct entrypoints use the same project scripts:
 
 ```powershell
@@ -79,6 +94,7 @@ npm run typecheck
 npm run build
 npm run build:legacy
 npm run check:secrets
+npm run check:contracts
 ```
 
 Unit checks exercise evidence matching, missing information, deterministic estimates, scope exclusions, history adjustments, sparse-data uncertainty, baseline changes and invalid actual hours. Browser checks exercise the full stored workflow. See `docs/demo-script.md` for a reproducible walkthrough.
