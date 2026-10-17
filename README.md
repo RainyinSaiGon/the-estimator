@@ -54,7 +54,9 @@ The language model extracts requirements and confirmed facts, not hours. A separ
 Historical matches use weighted feature similarity of at least 0.45. Each task uses a median actual-to-base effort ratio, shrunk toward 1 with four prior observations. Individual ratios are bounded between 0.35 and 3. Unknowns, sparse history and observed spread widen a **heuristic planning range**, not a statistical confidence interval. Original-scope hours enter calibration; added scope does not. A project is excluded from its own current estimate.
 
 ## Source map
-- `app/workspace-app.tsx`: the three-stage workspace and project history.
+- `app/home-screen.tsx`: interactive product overview and sample entry points.
+- `app/workspace-app.tsx`: shared navigation, the three-stage workspace and project history.
+- `app/globals.css`: responsive UI and shared visual system; see `docs/ui-design.md`.
 - `app/api/workspace/route.ts`: authenticated persistence, review and delivery lifecycle.
 - `lib/brief-ai.ts`: server-only structured extraction.
 - `lib/evidence.ts`: source-passage matching.

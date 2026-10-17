@@ -15,3 +15,14 @@ The Windows Sites package-manager shim failed to locate its npm entrypoint. The 
 
 ## Limits
 These checks establish the prototype's workflow and calculation behavior. The sample project library and illustrative delivery values are synthetic. They do not establish production prediction accuracy. Hosted runtime credentials and public judge access are separate from local verification.
+
+## UI refresh — 17 October 2026
+
+- Inspected the live ElevenLabs landing page and adapted its visual direction to The Estimator.
+- Browser review covered the overview, all three preview tabs, arrow-key tab navigation, the prefilled sample dialog, the stored request, and effort breakdown navigation.
+- Reviewed the mobile overview at a 390 px viewport. The document had no horizontal overflow; the request dialog remained centered within the viewport.
+- Fixed dialog centering and increased the mobile product scene height to keep the scope illustration in view.
+- TypeScript and the production build passed after the UI changes.
+- Saved the desktop overview screenshot to `outputs/estimator-elevenlabs-overview.jpg` (ignored local artifact).
+
+The UI review used the existing fictional local record and did not create a new delivery or make an AI API call. Domain and API regression tests were not rerun for this visual refresh.
