@@ -1,8 +1,8 @@
 # UI direction — 17 October 2026
 
-Reference: [ElevenLabs landing page](https://elevenlabs.io/), inspected live on 17 October 2026.
+Live references checked on 17 October 2026: [ElevenLabs home](https://elevenlabs.io/), [ElevenCreative](https://elevenlabs.io/creative), and [Studio](https://elevenlabs.io/studio). These public pages share bright neutral surfaces, confident sans-serif headings, compact navigation, and rounded black primary actions. The unauthenticated `/app/home` route rendered blank in the review browser, so the logged-in ElevenLabs workspace was not available for comparison.
 
-The Estimator adapts the live reference's generous white space, confident sans-serif headings, restrained navigation, and rounded controls. Product content, the stacked-layer brand, and the interface are specific to The Estimator. The reference is a visual cue, not a claim of partnership or copied assets.
+The Estimator adapts the public reference's generous white space, confident sans-serif headings, restrained navigation, and rounded controls. Its green signal accent makes effort and status easy to scan while keeping product content, the stacked-layer brand, and interface specific to The Estimator. The reference is a visual cue, not a claim of partnership or copied assets.
 
 ## Workspace system
 
