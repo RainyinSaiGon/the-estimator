@@ -40,7 +40,7 @@ go run ./services/estimator-go/cmd/estimator
 ```
 
 ```powershell
-python -m uvicorn main:app --app-dir services/brief-intelligence --host 127.0.0.1 --port 8001
+python services/brief-intelligence/main.py
 ```
 
 ```powershell
@@ -109,6 +109,7 @@ Historical matches use weighted feature similarity of at least 0.45. Each task u
 - `services/brief-intelligence/`: Python FastAPI sample parser and source-linked scope extraction.
 - `services/estimator-go/`: Go estimation engine and deterministic synthetic-history calibration.
 - `compose.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration.
+- `docs/service-operations.md`: health checks, structured request logs, timeout defaults and secret-loading rules.
 - `docs/adr/0001-next-go-python-first-slice.md`: service ownership, boundaries and migration constraints.
 - `app/home-screen.tsx`: interactive product overview and sample entry points.
 - `app/workspace-app.tsx`: shared navigation, the three-stage workspace and project history.

@@ -1,3 +1,5 @@
+import { configuredPreviewTimeoutMs, configuredServiceUrl } from "../../../../lib/operations.ts";
+
 const maxBriefLength = 20_000;
 const maxRequestBytes = 100_000;
 
@@ -6,11 +8,11 @@ type PreviewDependencies = {
   timeoutMs?: number;
   briefUrl?: string;
   estimatorUrl?: string;
+  requestId?: string;
 };
 
 export async function handlePreviewRequest(request: Request, dependencies: PreviewDependencies = {}) {
   const fetchImpl = dependencies.fetchImpl ?? fetch;
-  const timeoutMs = dependencies.timeoutMs ?? 10_000;
   let body: unknown;
   const contentLength = Number(request.headers.get("content-length") ?? 0);
   if (contentLength > maxRequestBytes) return Response.json({ error: "Request body is too large." }, { status: 413 });
@@ -41,14 +43,26 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
   if (parser !== "sample" && parser !== "ai") return Response.json({ error: "Choose the sample parser." }, { status: 400 });
   if (parser === "ai") return Response.json({ error: "AI parsing is not configured. Choose the sample parser." }, { status: 503 });
 
-  const briefUrl = dependencies.briefUrl ?? process.env.BRIEF_SERVICE_URL ?? "http://127.0.0.1:8001";
-  const estimatorUrl = dependencies.estimatorUrl ?? process.env.ESTIMATOR_SERVICE_URL ?? "http://127.0.0.1:8002";
   try {
-    const scopeResponse = await fetchImpl(`${briefUrl}/v1/briefs/analyze`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ brief, parser: "sample" }), signal: AbortSignal.timeout(timeoutMs), cache: "no-store" });
+    const timeoutMs = dependencies.timeoutMs ?? configuredPreviewTimeoutMs();
+    const briefUrl = dependencies.briefUrl ?? configuredServiceUrl("BRIEF_SERVICE_URL", "http://127.0.0.1:8001").toString().replace(/\/+$/, "");
+    const estimatorUrl = dependencies.estimatorUrl ?? configuredServiceUrl("ESTIMATOR_SERVICE_URL", "http://127.0.0.1:8002").toString().replace(/\/+$/, "");
+    const deadline = Date.now() + timeoutMs;
+    const signalForRemainingTime = () => {
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) throw new DOMException("Preview timed out.", "TimeoutError");
+      return AbortSignal.timeout(remainingMs);
+    };
+    const headers: Record<string, string> = { "content-type": "application/json" };
+    if (dependencies.requestId) headers["x-request-id"] = dependencies.requestId;
+    const scopeResponse = await fetchImpl(`${briefUrl}/v1/briefs/analyze`, { method: "POST", headers, body: JSON.stringify({ brief, parser: "sample" }), signal: signalForRemainingTime(), cache: "no-store" });
     const scopeBody = await scopeResponse.json().catch(() => ({})) as Record<string, unknown>;
-    if (!scopeResponse.ok) return Response.json({ error: scopeBody.detail ?? "Brief service could not analyze this request." }, { status: scopeResponse.status });
+    if (!scopeResponse.ok) {
+      if (scopeResponse.status === 504) return Response.json({ error: "A service took too long to respond. Try again." }, { status: 503 });
+      return Response.json({ error: scopeBody.detail ?? "Brief service could not analyze this request." }, { status: scopeResponse.status });
+    }
 
-    const estimateResponse = await fetchImpl(`${estimatorUrl}/v1/estimates`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ scope: scopeBody, answers: scopeBody.initialAnswers, excluded: [], historyPolicy: "demo" }), signal: AbortSignal.timeout(timeoutMs), cache: "no-store" });
+    const estimateResponse = await fetchImpl(`${estimatorUrl}/v1/estimates`, { method: "POST", headers, body: JSON.stringify({ scope: scopeBody, answers: scopeBody.initialAnswers, excluded: [], historyPolicy: "demo" }), signal: signalForRemainingTime(), cache: "no-store" });
     const estimateBody = await estimateResponse.json().catch(() => ({})) as Record<string, unknown>;
     if (!estimateResponse.ok) return Response.json({ error: estimateBody.error ?? "Estimator service could not create the preview." }, { status: estimateResponse.status });
     return Response.json({ scope: scopeBody, estimate: estimateBody }, { headers: { "cache-control": "no-store" } });

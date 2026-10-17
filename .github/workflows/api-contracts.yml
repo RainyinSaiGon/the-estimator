@@ -7,10 +7,17 @@ on:
       - "contracts/**"
       - "services/**"
       - "scripts/check_bff_route.mjs"
+      - "scripts/check_web_health.mjs"
       - "scripts/validate_contracts.py"
       - "package.json"
       - "apps/web/package.json"
       - "apps/web/app/api/v1/preview/**"
+      - "apps/web/app/health/**"
+      - "apps/web/lib/operations.ts"
+      - "compose.yaml"
+      - "Dockerfile.web"
+      - ".dockerignore"
+      - "docs/service-operations.md"
   push:
     branches:
       - main
@@ -19,10 +26,17 @@ on:
       - "contracts/**"
       - "services/**"
       - "scripts/check_bff_route.mjs"
+      - "scripts/check_web_health.mjs"
       - "scripts/validate_contracts.py"
       - "package.json"
       - "apps/web/package.json"
       - "apps/web/app/api/v1/preview/**"
+      - "apps/web/app/health/**"
+      - "apps/web/lib/operations.ts"
+      - "compose.yaml"
+      - "Dockerfile.web"
+      - ".dockerignore"
+      - "docs/service-operations.md"
   workflow_dispatch:
 
 permissions:

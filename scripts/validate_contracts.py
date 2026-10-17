@@ -21,6 +21,7 @@ from openapi_spec_validator import validate_spec
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "contracts" / "v1" / "openapi.json"
 ROUTE_CHECK_PATH = ROOT / "scripts" / "check_bff_route.mjs"
+WEB_HEALTH_CHECK_PATH = ROOT / "scripts" / "check_web_health.mjs"
 BRIEF_DIR = ROOT / "services" / "brief-intelligence"
 ESTIMATOR_DIR = ROOT / "services" / "estimator-go"
 SAMPLE_BRIEF = (
@@ -127,6 +128,33 @@ def stop_process(process: subprocess.Popen[bytes] | None) -> None:
         process.wait(timeout=5)
 
 
+def check_structured_logs(process: subprocess.Popen[str], service: str) -> None:
+    output, _ = process.communicate(timeout=5)
+    lines = [line for line in output.splitlines() if line.strip()]
+    if not lines:
+        raise RuntimeError(f"{service} emitted no operational logs.")
+    records = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(f"{service} emitted a non-JSON log line: {line!r}") from error
+        if not isinstance(record, dict) or record.get("service") != service:
+            raise RuntimeError(f"{service} emitted an invalid log record: {record!r}")
+        if not all(key in record for key in ("timestamp", "severity", "event")):
+            raise RuntimeError(f"{service} log record lacks standard fields: {record!r}")
+        if "http_request" == record.get("event"):
+            if not all(key in record for key in ("request_id", "method", "path", "status", "duration_ms")):
+                raise RuntimeError(f"{service} HTTP log lacks request fields: {record!r}")
+            if "?" in record["path"]:
+                raise RuntimeError(f"{service} HTTP log included a query string: {record!r}")
+        records.append(record)
+    if SAMPLE_BRIEF in output:
+        raise RuntimeError(f"{service} included the submitted brief in its logs.")
+    if not any(record.get("event") == "http_request" for record in records):
+        raise RuntimeError(f"{service} emitted no structured HTTP request log.")
+
+
 def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:
     for path, component in (("/health/live", "HealthLive"), ("/health/ready", readiness_schema)):
         status, body = json_request(f"{base_url}{path}")
@@ -162,6 +190,7 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         "oversized-body": 413,
         "ai-unconfigured": 503,
         "python-error": 422,
+        "python-timeout-response": 503,
         "estimator-error": 422,
         "upstream-unavailable": 503,
         "brief-timeout": 503,
@@ -172,6 +201,7 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         "oversized-body": "Request body is too large.",
         "ai-unconfigured": "AI parsing is not configured. Choose the sample parser.",
         "python-error": "This brief is not supported.",
+        "python-timeout-response": "A service took too long to respond. Try again.",
         "estimator-error": "Invalid estimate request.",
         "upstream-unavailable": "A preview service is unavailable. Start the local services and try again.",
         "brief-timeout": "A service took too long to respond. Try again.",
@@ -198,14 +228,52 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         validate_payload(spec, component, body, f"BFF {name} HTTP {status} response")
 
 
+def check_web_health(spec: dict[str, Any], brief_base: str, estimate_base: str) -> None:
+    environment = {
+        **os.environ,
+        "BRIEF_SERVICE_URL": brief_base,
+        "ESTIMATOR_SERVICE_URL": estimate_base,
+    }
+    completed = subprocess.run(
+        ["node", "--experimental-strip-types", str(WEB_HEALTH_CHECK_PATH)],
+        cwd=ROOT,
+        env=environment,
+        capture_output=True,
+        check=False,
+        text=True,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Web health route checks failed. "
+            f"stdout: {completed.stdout.strip()} stderr: {completed.stderr.strip()}"
+        )
+    try:
+        results = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(f"Web health checker did not return JSON: {completed.stdout!r}") from error
+    expected = {
+        "web-live": (200, "HealthLive"),
+        "web-ready": (200, "WebServiceReady"),
+        "web-not-ready": (503, "WebServiceNotReady"),
+    }
+    if not isinstance(results, list) or {item.get("name") for item in results} != set(expected):
+        raise RuntimeError(f"Web health checker returned unexpected results: {results!r}")
+    for result in results:
+        name = result["name"]
+        status, schema = expected[name]
+        if result.get("status") != status:
+            raise RuntimeError(f"Web {name} returned HTTP {result.get('status')}; expected {status}.")
+        validate_payload(spec, schema, result.get("body"), f"Web {name} HTTP {status} response")
+
+
 def check_live_payloads(spec: dict[str, Any]) -> None:
     brief_port, estimate_port = free_port(), free_port()
     while estimate_port == brief_port:
         estimate_port = free_port()
 
     environment = os.environ.copy()
-    brief_env = {**environment, "PORT": str(brief_port)}
-    estimate_env = {**environment, "PORT": str(estimate_port)}
+    brief_env = {**environment, "HOST": "127.0.0.1", "PORT": str(brief_port), "REQUEST_TIMEOUT_SECONDS": "8"}
+    estimate_env = {**environment, "HOST": "127.0.0.1", "PORT": str(estimate_port), "REQUEST_TIMEOUT": "8s"}
     brief_process: subprocess.Popen[bytes] | None = None
     estimate_process: subprocess.Popen[bytes] | None = None
 
@@ -218,29 +286,20 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
         )
         try:
             brief_process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-m",
-                    "uvicorn",
-                    "main:app",
-                    "--app-dir",
-                    str(BRIEF_DIR),
-                    "--host",
-                    "127.0.0.1",
-                    "--port",
-                    str(brief_port),
-                ],
+                [sys.executable, str(BRIEF_DIR / "main.py")],
                 cwd=ROOT,
                 env=brief_env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
             estimate_process = subprocess.Popen(
                 [str(executable)],
                 cwd=ESTIMATOR_DIR,
                 env=estimate_env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
             )
 
             brief_base = f"http://127.0.0.1:{brief_port}"
@@ -249,6 +308,7 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             wait_until_ready(estimate_process, f"{estimate_base}/health/ready", "Go estimator")
             check_service_health(spec, brief_base, "Python brief service", "BriefServiceReady")
             check_service_health(spec, estimate_base, "Go estimator", "EstimatorServiceReady")
+            check_web_health(spec, brief_base, estimate_base)
 
             brief_request = {"brief": SAMPLE_BRIEF, "parser": "sample"}
             validate_payload(spec, "BriefAnalyzeRequest", brief_request, "Python request")
@@ -339,6 +399,8 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
         finally:
             stop_process(estimate_process)
             stop_process(brief_process)
+        check_structured_logs(brief_process, "brief-intelligence")
+        check_structured_logs(estimate_process, "estimator-go")
 
 
 def main() -> int:
@@ -354,7 +416,7 @@ def main() -> int:
         return 1
 
     print("OpenAPI 3.1 contract is valid.")
-    print("Live Python and Go health/success/error payloads and actual BFF success/error/timeout responses match their schemas.")
+    print("Live web, Python and Go health payloads, structured service logs and actual BFF success/error/timeout responses match their contracts.")
     return 0
 
 

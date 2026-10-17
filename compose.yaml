@@ -6,6 +6,7 @@ services:
     environment:
       BRIEF_SERVICE_URL: http://brief:8001
       ESTIMATOR_SERVICE_URL: http://estimator:8002
+      PREVIEW_TIMEOUT_MS: "10000"
     depends_on:
       brief:
         condition: service_healthy
@@ -14,7 +15,7 @@ services:
     ports:
       - "127.0.0.1:3000:3000"
     healthcheck:
-      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -25,6 +26,10 @@ services:
       dockerfile: services/brief-intelligence/Dockerfile
     expose:
       - "8001"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8001"
+      REQUEST_TIMEOUT_SECONDS: "8"
 
   estimator:
     build:
@@ -32,3 +37,7 @@ services:
       dockerfile: services/estimator-go/Dockerfile
     expose:
       - "8002"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8002"
+      REQUEST_TIMEOUT: 8s
