@@ -29,7 +29,7 @@ permissions:
 jobs:
   api-contracts:
     name: Validate API contracts
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
       - name: Check out source
@@ -49,6 +49,7 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.0"
+          cache-dependency-path: services/estimator-go/go.mod
 
       - name: Install contract and service dependencies
         run: |
