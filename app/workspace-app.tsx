@@ -9,6 +9,7 @@ import ClarificationPanel from "./clarification-panel";
 import LearningReport from "./learning-report";
 import BaselineComparison from "./baseline-comparison";
 import ReferenceEvidence from "./reference-evidence";
+import HistoryCsvImport from "./history-csv-import";
 import { estimateMarkdown } from "../lib/baselines";
 
 type Tab = "scope" | "estimate" | "delivery";
@@ -44,7 +45,7 @@ export default function WorkspaceApp({ guest = false }: { guest?: boolean }) {
   async function load() {
     setBusy(true); setError("");
     if (guest) { setData({ authenticated: false, projects: [], history: [], aiReady: false, user: "" }); setBusy(false); return; }
-    try { const r = await fetch("/api/workspace", { cache: "no-store" }); const d = await r.json() as Workspace & { error?: string }; if (!r.ok) throw new Error(d.error); setData(d); setSelected(s => s ?? d.projects[0]?.id ?? null); }
+    try { const r = await fetch("/api/workspace", { cache: "no-store" }); const d = await r.json() as Workspace & { error?: string }; if (!r.ok) throw new Error(d.error); setData(d); setSelected(s => s ?? d.projects.find(p => !p.importProvenance)?.id ?? null); }
     catch (e) { setError(e instanceof Error ? e.message : "Could not load the workspace."); } finally { setBusy(false); }
   }
   useEffect(() => { void load(); }, []);
@@ -76,12 +77,22 @@ export default function WorkspaceApp({ guest = false }: { guest?: boolean }) {
   async function saveReview() { await mutate({ action: "review", ...identity, answers, excluded, notes, historyPolicy: policy, confirmKeys }, "Clarifications saved. Your estimate has been updated."); }
   async function saveBaseline() { await mutate({ action: "freeze", ...identity, reviewed, reason: baselineReason }, "Reviewed estimate saved as an immutable baseline."); }
   async function complete() { if (!baseline) return; const values = Object.fromEntries(baseline.estimate.tasks.map(t => [t.category, Number(actualHours[t.category])])); await mutate({ action: "complete", ...identity, hours: values, additionalHours: Number(additional), explanation, synthetic }, synthetic ? "Synthetic delivery recorded. It is eligible for demonstration estimates only." : "Delivery recorded. Eligible future estimates can use this result."); }
+  async function importHistory(sourceFile: string, records: { line: number; row: unknown }[]) {
+    setError(""); setNotice("");
+    const response = await fetch("/api/workspace", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action: "importHistory", sourceFile, records }) });
+    const result = await response.json() as Workspace & { error?: string; importedCount: number; skippedCount: number };
+    if (!response.ok) throw new Error(result.error || "The history import could not be saved.");
+    setData(result);
+    setNotice(`${result.importedCount} history record${result.importedCount === 1 ? "" : "s"} imported${result.skippedCount ? `; ${result.skippedCount} duplicate${result.skippedCount === 1 ? "" : "s"} skipped` : ""}.`);
+    return { importedCount: result.importedCount, skippedCount: result.skippedCount };
+  }
   function showEvidence(quote: string) { setHighlight(quote); briefRef.current?.scrollIntoView({ block: "center" }); }
   function exportEstimate(version?: Snapshot) {
     if (!project || !estimate || !answers) return;
     const saved = version ?? baseline;
     download(`estimate${saved ? `-v${saved.revision}` : "-draft"}.md`, estimateMarkdown(project, saved ?? { answers, excluded, notes, historyPolicy: policy, estimate }, saved));
   }
+  const requestProjects = data?.projects.filter(p => !p.importProvenance) ?? [];
   const recorded = data?.history.filter(h => !h.synthetic).length ?? 0;
   return <div className={`app-shell ${homePage ? "is-home" : ""}`}>
     <a className="skip-link" href="#main-content">Skip to content</a>
@@ -93,10 +104,10 @@ export default function WorkspaceApp({ guest = false }: { guest?: boolean }) {
     <aside className="sidebar">
       <div className="workspace-name"><span className="workspace-avatar">D</span><div>Delivery workspace<small>Integration delivery</small></div><ChevronRight size={15} /></div>
       <div className="nav-label">WORKSPACE</div>
-      <button className={`nav-item ${!historyPage ? "active" : ""}`} onClick={showRequests}><FolderOpen size={18} />Requests<span className="nav-count">{data?.projects.length ?? 0}</span></button>
+      <button className={`nav-item ${!historyPage ? "active" : ""}`} onClick={showRequests}><FolderOpen size={18} />Requests<span className="nav-count">{requestProjects.length}</span></button>
       <button className={`nav-item ${historyPage ? "active" : ""}`} onClick={showHistory}><HistoryIcon size={18} />Project history</button>
       <div className="nav-label recent-label">RECENT REQUESTS <button className="icon-button" aria-label="Create request" onClick={() => openNew()}><Plus size={15} /></button></div>
-      <div className="recent-list">{data?.projects.slice(0, 7).map(p => <button key={p.id} className={`recent-item ${p.id === selected && !historyPage ? "selected" : ""}`} onClick={() => choose(p)}><span className={`status-dot ${p.actuals ? "done" : p.versions.length ? "saved" : ""}`} /><span>{p.title}</span></button>)}{!data?.projects.length && <p className="empty-recent">Your next commitment starts here.</p>}</div>
+      <div className="recent-list">{requestProjects.slice(0, 7).map(p => <button key={p.id} className={`recent-item ${p.id === selected && !historyPage ? "selected" : ""}`} onClick={() => choose(p)}><span className={`status-dot ${p.actuals ? "done" : p.versions.length ? "saved" : ""}`} /><span>{p.title}</span></button>)}{!requestProjects.length && <p className="empty-recent">Your next commitment starts here.</p>}</div>
       <div className="sidebar-bottom"><div className="learning-card"><TrendingUp size={19} /><strong>A little wiser, every delivery.</strong><p>Record actual effort to inform your next estimate.</p><button onClick={showHistory}>Explore project history <ArrowUpRight size={14} /></button></div><button className="nav-item" onClick={() => setHelp(true)}><CircleHelp size={17} />How estimates work</button><div className="user"><span className="user-avatar">{data?.user?.charAt(0).toUpperCase() || "V"}</span><div><strong>{data?.user || "Your workspace"}</strong><small>Private workspace</small></div><a href="/signout-with-chatgpt?return_to=/" target="_top" className="signout">Sign out</a></div></div>
     </aside>
     <div className="main-shell"><header className="topbar"><div><span className="breadcrumb">Workspace</span><ChevronRight size={14} /><span>{historyPage ? "Project history" : "Requests"}</span></div><div className="topbar-right"><span className={`connection ${data?.aiReady ? "ready" : ""}`}><span />{data?.aiReady ? "AI configured" : "Sample parser available"}</span><button className="button primary small" onClick={() => openNew()}><Plus size={16} />New request</button></div></header>
@@ -106,10 +117,11 @@ export default function WorkspaceApp({ guest = false }: { guest?: boolean }) {
       {!data ? <div className="loading-state">{busy ? <><Loader2 className="spin" />Opening your workspace…</> : <><p>Your workspace could not be loaded.</p><button className="button" onClick={load}>Try again</button></>}</div> : homePage ? <HomeScreen onNewRequest={openNew} onOpenHistory={showHistory} /> : historyPage ? <>
         <div className="page-heading"><div><p className="eyebrow">YOUR TEAM'S DELIVERY MEMORY</p><h1>Project history</h1><p>Every completed project gives the next estimate a stronger starting point.</p></div><button className="button" onClick={() => download("estimator-workspace.json", JSON.stringify(data.projects, null, 2), "application/json")}><ArrowDownToLine size={16} />Export records</button></div>
         <div className="metrics"><div><span>Reference projects</span><strong>{data.history.length}</strong></div><div><span>Recorded deliveries</span><strong>{recorded}</strong></div><div><span>Synthetic examples</span><strong>{data.history.filter(h => h.synthetic).length}</strong></div></div>
-        <div className="info-note"><CircleHelp size={17} />The built-in reference library is fictional demonstration data. Recorded deliveries are user-entered; no production accuracy improvement has been established.</div>
-        <LearningReport projects={data.projects} /><section className="panel history-panel"><div className="panel-heading"><h2>Completed reference work</h2><span className="muted">Original scope only</span></div><div className="table-scroll"><table><thead><tr><th>Project</th><th>Data flow</th><th>Data quality</th><th>Original effort</th><th>Source</th></tr></thead><tbody>{data.history.map(h => <tr key={h.id}><td><strong>{h.name}</strong></td><td>{h.features.direction}</td><td>{h.features.quality}</td><td className="numeric">{hours(Object.values(h.actual).reduce((s, n) => s + (n ?? 0), 0))} h</td><td><span className={`tag ${h.synthetic ? "neutral" : "green"}`}>{h.synthetic ? "Synthetic" : "Recorded"}</span></td></tr>)}</tbody></table></div></section>
+        <div className="info-note"><CircleHelp size={17} />The built-in reference library is fictional demonstration data. Recorded deliveries are user-entered or imported with review; no production accuracy improvement has been established.</div>
+        <HistoryCsvImport existing={data.projects} onImport={importHistory} />
+        <LearningReport projects={data.projects} /><section className="panel history-panel"><div className="panel-heading"><h2>Completed reference work</h2><span className="muted">Original scope only</span></div><div className="table-scroll"><table><thead><tr><th>Project</th><th>Data flow</th><th>Data quality</th><th>Original effort</th><th>Source</th></tr></thead><tbody>{data.history.map(h => <tr key={h.id}><td><strong>{h.name}</strong></td><td>{h.features.direction}</td><td>{h.features.quality}</td><td className="numeric">{hours(Object.values(h.actual).reduce((s, n) => s + (n ?? 0), 0))} h</td><td>{h.importProvenance ? <><span className="tag green">Imported CSV</span><small className="table-subline">{h.importProvenance.sourceFile}, row {h.importProvenance.row}</small></> : <span className={`tag ${h.synthetic ? "neutral" : "green"}`}>{h.synthetic ? "Synthetic" : "Recorded"}</span>}</td></tr>)}</tbody></table></div></section>
       </> : !project ? <section className="workspace-empty"><span className="empty-request-icon"><FileText size={28} strokeWidth={1.5} /></span><p className="eyebrow">A CLEARER STARTING POINT</p><h1>Start with a client brief.</h1><p>Create your first request to review the scope, clarify the unknowns, and see the effort behind the work.</p><div><button className="button primary" onClick={() => openNew()}>New request <ArrowRight size={16} /></button><button className="button" onClick={() => openNew(true)}>Try a sample</button></div></section> : estimate && <>
-        <div className="page-heading"><div><div className="heading-meta"><span className="eyebrow">INTEGRATION REQUEST</span><span className={`tag ${project.actuals ? "green" : baseline ? "green" : "amber"}`}>{project.actuals ? "Delivered" : baseline ? `Baseline v${baseline.revision}` : "Draft scope"}</span></div><h1>{project.title}</h1><p>Created {date(project.createdAt)} <span className="dot-separator">·</span> {project.scope.parser === "openai" ? `Analyzed with ${project.scope.model}` : "Sample parser · review required"}</p></div><button className="button" onClick={() => exportEstimate()}><ArrowDownToLine size={16} />Export estimate</button></div>
+        <div className="page-heading"><div><div className="heading-meta"><span className="eyebrow">INTEGRATION REQUEST</span><span className={`tag ${project.actuals ? "green" : baseline ? "green" : "amber"}`}>{project.actuals ? "Delivered" : baseline ? `Baseline v${baseline.revision}` : "Draft scope"}</span></div><h1>{project.title}</h1><p>Created {date(project.createdAt)} <span className="dot-separator">·</span> {project.importProvenance ? "Imported historical delivery" : project.scope.parser === "openai" ? `Analyzed with ${project.scope.model}` : "Sample parser · review required"}</p></div><button className="button" onClick={() => exportEstimate()}><ArrowDownToLine size={16} />Export estimate</button></div>
         <nav className="tabs" aria-label="Request stages">{([["scope", "Scope & questions"], ["estimate", "Effort estimate"], ["delivery", "Delivery & learning"]] as [Tab, string][]).map(([id, label], i) => <button key={id} className={tab === id ? "selected" : ""} onClick={() => setTab(id)}><span>{String(i + 1).padStart(2, "0")}</span>{label}{id === "scope" && estimate.blockers.length > 0 && <b>{estimate.blockers.length}</b>}</button>)}</nav>
         <div className="workspace-grid"><div className="primary-column">
         {tab === "scope" ? <>

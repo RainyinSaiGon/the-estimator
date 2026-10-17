@@ -71,7 +71,7 @@ export function estimateProject(project: Pick<Project, "scope" | "answers" | "ex
 export function getHistory(projects: Project[]): History[] {
   return [...seedHistory, ...projects.filter(p => p.actuals && p.versions.length).map(p => {
     const v = p.versions.at(-1)!;
-    return { id: p.id, name: p.title, synthetic: p.actuals!.synthetic, features: v.answers, base: Object.fromEntries(v.estimate.tasks.map(t => [t.category, t.base])), actual: { ...p.actuals!.hours } };
+    return { id: p.id, name: p.title, synthetic: p.actuals!.synthetic, features: v.answers, base: Object.fromEntries(v.estimate.tasks.map(t => [t.category, t.base])), actual: { ...p.actuals!.hours }, ...(p.importProvenance ? { importProvenance: p.importProvenance } : {}) };
   })];
 }
 export function validateActuals(estimate: Estimate, actuals: Actuals) {
