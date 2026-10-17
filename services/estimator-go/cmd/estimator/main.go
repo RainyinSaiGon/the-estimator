@@ -48,6 +48,16 @@ type EstimateRequest struct {
 	HistoryPolicy string   `json:"historyPolicy"`
 }
 
+type GeneralWorkPackage struct {
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	Complexity string `json:"complexity"`
+}
+
+type GeneralEstimateRequest struct {
+	WorkPackages []GeneralWorkPackage `json:"workPackages"`
+}
+
 type History struct {
 	ID        string             `json:"id"`
 	Name      string             `json:"name"`
@@ -136,6 +146,7 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "engine": "integration-effort/2.0"})
 	})
 	mux.HandleFunc("POST /v1/estimates", estimateHandler)
+	mux.HandleFunc("POST /v1/estimates/general", generalEstimateHandler)
 	server := &http.Server{
 		Addr:              net.JoinHostPort(host, port),
 		Handler:           requestLogging(jsonTimeoutHandler(requestTimeout, mux)),
@@ -304,6 +315,80 @@ func estimateHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+func generalEstimateHandler(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
+	defer r.Body.Close()
+	var req GeneralEstimateRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid general estimate request: " + err.Error()})
+		return
+	}
+	result, err := estimateGeneral(req)
+	if err != nil {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+func estimateGeneral(req GeneralEstimateRequest) (Estimate, error) {
+	if len(req.WorkPackages) == 0 || len(req.WorkPackages) > 30 {
+		return Estimate{}, errors.New("workPackages must contain between 1 and 30 items")
+	}
+	tasks := make([]Task, 0, len(req.WorkPackages))
+	seen := make(map[string]bool, len(req.WorkPackages))
+	var totalHours float64
+	var totalLow, totalHigh int
+	for _, item := range req.WorkPackages {
+		id := strings.TrimSpace(item.ID)
+		title := strings.TrimSpace(item.Title)
+		if id == "" || len(id) > 80 || title == "" || len(title) > 240 {
+			return Estimate{}, errors.New("each work package needs an ID and a title within the documented limits")
+		}
+		if seen[id] {
+			return Estimate{}, fmt.Errorf("duplicate work package ID: %s", id)
+		}
+		seen[id] = true
+		var base float64
+		var low, high int
+		switch item.Complexity {
+		case "small":
+			base, low, high = 4, 2, 8
+		case "moderate":
+			base, low, high = 16, 8, 32
+		case "complex":
+			base, low, high = 48, 24, 96
+		default:
+			return Estimate{}, fmt.Errorf("work package %q complexity must be small, moderate, or complex", id)
+		}
+		tasks = append(tasks, Task{
+			Category: id, Label: title, Base: base, Factor: 1, Hours: base,
+			Low: low, High: high, Observations: 0, ReferenceIDs: []string{},
+		})
+		totalHours += base
+		totalLow += low
+		totalHigh += high
+	}
+	return Estimate{
+		Tasks: tasks, Low: totalLow, High: totalHigh, Hours: round1(totalHours), BaseHours: round1(totalHours),
+		Blockers: []string{},
+		Assumptions: []string{
+			"General-work complexity bands are rough, uncalibrated planning priors, not predictions learned from recorded deliveries.",
+			"A human must review agent-assigned complexity and the completeness of each work package before using this range.",
+			"Ranges are person-hours and do not represent elapsed time, staffing capacity, or a statistical confidence interval.",
+		},
+		References: []Reference{},
+		Provenance: map[string]any{
+			"engineVersion": "general-planning/1.0", "mode": "general", "dataBasis": "uncalibrated planning priors",
+			"referenceIds": []string{}, "complexityBands": map[string][]float64{
+				"small": {2, 4, 8}, "moderate": {8, 16, 32}, "complex": {24, 48, 96},
+			},
+		},
+	}, nil
 }
 
 func estimate(req EstimateRequest) (Estimate, error) {

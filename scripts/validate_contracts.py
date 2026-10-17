@@ -101,6 +101,32 @@ def json_request(url: str, payload: Any | None = None, timeout: float = 3) -> tu
         return error.code, json.loads(error.read())
 
 
+def text_file_request(url: str, filename: str, content: str) -> tuple[int, Any]:
+    boundary = "estimator-contract-boundary"
+    file_part = (
+        f"--{boundary}\r\n"
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+        "Content-Type: text/plain; charset=utf-8\r\n\r\n"
+        f"{content}\r\n"
+    )
+    fields = "".join(
+        f"--{boundary}\r\nContent-Disposition: form-data; name=\"{name}\"\r\n\r\n{value}\r\n"
+        for name, value in (("parser", "sample"), ("capabilities", "[]"))
+    )
+    data = (file_part + fields + f"--{boundary}--\r\n").encode("utf-8")
+    request = Request(
+        url,
+        data=data,
+        headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+        method="POST",
+    )
+    try:
+        with urlopen(request, timeout=3) as response:
+            return response.status, json.loads(response.read())
+    except HTTPError as error:
+        return error.code, json.loads(error.read())
+
+
 def wait_until_ready(process: subprocess.Popen[bytes], url: str, name: str) -> None:
     deadline = time.monotonic() + 45
     last_error: Exception | None = None
@@ -171,6 +197,8 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         capture_output=True,
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -185,12 +213,17 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         raise RuntimeError(f"BFF route checker returned an invalid result list: {results!r}")
 
     expected_statuses = {
-        "success": 200,
+        "analysis-success": 200,
+        "document-analysis-success": 200,
         "malformed-json": 400,
         "oversized-body": 413,
-        "ai-unconfigured": 503,
+        "ai-provider-error": 503,
         "python-error": 422,
         "python-timeout-response": 503,
+        "estimate-success": 200,
+        "general-estimate-success": 200,
+        "estimate-unconfirmed": 400,
+        "estimate-invalid-evidence": 422,
         "estimator-error": 422,
         "upstream-unavailable": 503,
         "brief-timeout": 503,
@@ -199,13 +232,13 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
     expected_errors = {
         "malformed-json": "Request body must be valid JSON.",
         "oversized-body": "Request body is too large.",
-        "ai-unconfigured": "AI parsing is not configured. Choose the sample parser.",
+        "ai-provider-error": "AI session permission is missing.",
         "python-error": "This brief is not supported.",
-        "python-timeout-response": "A service took too long to respond. Try again.",
+        "python-timeout-response": "The analysis took too long. Try again or use sample mode.",
         "estimator-error": "Invalid estimate request.",
         "upstream-unavailable": "A preview service is unavailable. Start the local services and try again.",
-        "brief-timeout": "A service took too long to respond. Try again.",
-        "estimator-timeout": "A service took too long to respond. Try again.",
+        "brief-timeout": "A service took too long to respond. Try again or use sample mode.",
+        "estimator-timeout": "A service took too long to respond. Try again or use sample mode.",
     }
     actual_names = {item.get("name") for item in results}
     if actual_names != set(expected_statuses):
@@ -213,18 +246,26 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
             "BFF route checker returned unexpected scenarios: "
             f"expected {sorted(expected_statuses)}, received {sorted(actual_names)}"
         )
-    documented_responses = spec["paths"]["/api/v1/preview"]["post"]["responses"]
     for result in results:
         name = result["name"]
         status = result.get("status")
         if status != expected_statuses[name]:
             raise RuntimeError(f"BFF {name} scenario returned HTTP {status}; expected {expected_statuses[name]}.")
+        is_estimate = name.startswith("estimate") or name == "estimator-error" or name == "estimator-timeout"
+        route = "/api/v1/preview/estimate" if is_estimate else "/api/v1/preview"
+        documented_responses = spec["paths"][route]["post"]["responses"]
         if str(status) not in documented_responses:
-            raise RuntimeError(f"BFF HTTP {status} from {name} is missing from the OpenAPI responses.")
+            raise RuntimeError(f"BFF HTTP {status} from {name} on {route} is missing from the OpenAPI responses.")
         body = result.get("body")
         if name in expected_errors and (not isinstance(body, dict) or body.get("error") != expected_errors[name]):
             raise RuntimeError(f"BFF {name} returned an unexpected error body: {body!r}")
-        component = "PreviewResponse" if name == "success" else "BFFError"
+        if name in {"analysis-success", "document-analysis-success"} and (not isinstance(body, dict) or "scope" not in body or "estimate" in body):
+            raise RuntimeError(f"BFF analysis must return scope without calculating an estimate: {body!r}")
+        component = (
+            "PreviewResponse" if name in {"analysis-success", "document-analysis-success"}
+            else "EstimateConfirmationResponse" if name in {"estimate-success", "general-estimate-success"}
+            else "BFFError"
+        )
         validate_payload(spec, component, body, f"BFF {name} HTTP {status} response")
 
 
@@ -241,6 +282,8 @@ def check_web_health(spec: dict[str, Any], brief_base: str, estimate_base: str) 
         capture_output=True,
         check=False,
         text=True,
+        encoding="utf-8",
+        errors="replace",
     )
     if completed.returncode != 0:
         raise RuntimeError(
@@ -273,6 +316,8 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
 
     environment = os.environ.copy()
     brief_env = {**environment, "HOST": "127.0.0.1", "PORT": str(brief_port), "REQUEST_TIMEOUT_SECONDS": "8"}
+    brief_env.pop("OPENAI_API_KEY", None)
+    brief_env.pop("AGENT_MODEL", None)
     estimate_env = {**environment, "HOST": "127.0.0.1", "PORT": str(estimate_port), "REQUEST_TIMEOUT": "8s"}
     brief_process: subprocess.Popen[bytes] | None = None
     estimate_process: subprocess.Popen[bytes] | None = None
@@ -292,6 +337,8 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             estimate_process = subprocess.Popen(
                 [str(executable)],
@@ -300,6 +347,8 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
 
             brief_base = f"http://127.0.0.1:{brief_port}"
@@ -316,9 +365,34 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             if brief_status != 200:
                 raise RuntimeError(f"Python brief service returned HTTP {brief_status}: {scope}")
             validate_payload(spec, "Scope", scope, "Python response")
+            if scope.get("source", {}).get("reviewText") != SAMPLE_BRIEF:
+                raise RuntimeError("Python analysis did not return the extracted source needed to verify reviewed evidence.")
+            if any(item.get("evidenceStatus") != "verified" for item in scope.get("requirements", [])):
+                raise RuntimeError("The deterministic sample parser marked a direct source passage as unverified.")
+            document_brief = "Prepare a fictional onboarding guide and facilitate a project planning workshop for the delivery team."
+            document_status, document_scope = text_file_request(
+                f"{brief_base}/v1/briefs/analyze-document",
+                "fictional-client-brief.txt",
+                document_brief,
+            )
+            if document_status != 200:
+                raise RuntimeError(f"Python document intake returned HTTP {document_status}: {document_scope}")
+            validate_payload(spec, "Scope", document_scope, "Python document response")
+            if document_scope.get("source", {}).get("name") != "fictional-client-brief.txt" or document_scope.get("source", {}).get("type") != "txt" or document_scope.get("source", {}).get("reviewText") != document_brief:
+                raise RuntimeError("Python document intake did not preserve filename, type and extracted source text.")
 
+            integration_scope = {
+                "summary": scope["summary"],
+                "requirements": [
+                    {"id": item["id"], "title": item["title"], "evidence": item["evidence"]}
+                    for item in scope["requirements"]
+                ],
+                "initialAnswers": scope["initialAnswers"],
+                "risks": scope["risks"],
+                "parser": scope["parser"],
+            }
             estimate_request = {
-                "scope": scope,
+                "scope": integration_scope,
                 "answers": scope["initialAnswers"],
                 "excluded": [],
                 "historyPolicy": "demo",
@@ -334,9 +408,34 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             validate_payload(
                 spec,
                 "PreviewResponse",
-                {"scope": scope, "estimate": estimate},
-                "BFF response",
+                {"scope": scope},
+                "BFF analysis response",
             )
+
+            general_brief = (
+                "Prepare a project onboarding handbook and facilitate a planning workshop "
+                "for a 12-person team. Include a one-page guide."
+            )
+            general_status, general_scope = json_request(
+                f"{brief_base}/v1/briefs/analyze",
+                {"brief": general_brief, "parser": "sample"},
+            )
+            if general_status != 200 or general_scope.get("estimateMode") != "general":
+                raise RuntimeError(f"Expected general-work analysis for the fictional workshop brief, received {general_status}: {general_scope}")
+            validate_payload(spec, "Scope", general_scope, "Python general-work response")
+            general_request = {
+                "workPackages": [
+                    {"id": item["id"], "title": item["title"], "complexity": item["complexity"]}
+                    for item in general_scope["requirements"]
+                ]
+            }
+            validate_payload(spec, "GeneralEstimateRequest", general_request, "Go general-work request")
+            general_status, general_estimate = json_request(
+                f"{estimate_base}/v1/estimates/general", general_request
+            )
+            if general_status != 200:
+                raise RuntimeError(f"Go general-work estimator returned HTTP {general_status}: {general_estimate}")
+            validate_payload(spec, "Estimate", general_estimate, "Go general-work response")
             check_bff_route(spec, scope, estimate)
             validate_payload(
                 spec,
@@ -361,19 +460,12 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
 
             ai_request = {"brief": SAMPLE_BRIEF, "parser": "ai"}
             validate_payload(spec, "PreviewRequest", ai_request, "BFF AI request")
-            validate_payload(
-                spec,
-                "BFFError",
-                {"error": "AI parsing is not configured. Choose the sample parser."},
-                "BFF AI-unavailable response",
-            )
-
-            invalid_brief = "Our customer team needs a cleaner place to coordinate account work."
+            invalid_brief = "Too short."
             brief_error_status, brief_error = json_request(
                 f"{brief_base}/v1/briefs/analyze", {"brief": invalid_brief, "parser": "sample"}
             )
             if brief_error_status != 422:
-                raise RuntimeError(f"Expected Python unsupported-scope response 422, received {brief_error_status}.")
+                raise RuntimeError(f"Expected Python short-brief response 422, received {brief_error_status}.")
             validate_payload(spec, "PythonError", brief_error, "Python 422 response")
             parser_error_status, parser_error = json_request(
                 f"{brief_base}/v1/briefs/analyze", {"brief": SAMPLE_BRIEF, "parser": "ai"}

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { handlePreviewRequest } from "../apps/web/app/api/v1/preview/preview-handler.ts";
+import { handleEstimateConfirmation, handlePreviewRequest } from "../apps/web/app/api/v1/preview/preview-handler.ts";
 
 const briefUrl = "http://brief.test";
 const estimatorUrl = "http://estimator.test";
@@ -8,8 +8,8 @@ let input = "";
 for await (const chunk of process.stdin) input += chunk;
 const { scope, estimate } = JSON.parse(input);
 
-function makeRequest(body) {
-  return new Request("http://estimator.test/api/v1/preview", {
+function makeRequest(body, path = "/api/v1/preview") {
+  return new Request(`http://estimator.test${path}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body,
@@ -28,28 +28,44 @@ async function collect(name, response, expectedStatus) {
   results.push({ name, status: response.status, body });
 }
 
-const successCalls = [];
-const successResponse = await handlePreviewRequest(
-  makeRequest(JSON.stringify({ brief: sampleBrief })),
+const analysisCalls = [];
+const analysisResponse = await handlePreviewRequest(
+  makeRequest(JSON.stringify({ brief: sampleBrief, parser: "sample" })),
   makeOptions(async (url, options) => {
-    successCalls.push({ url, options });
+    analysisCalls.push({ url, options });
+    assert.equal(url, `${briefUrl}/v1/briefs/analyze`);
     assert.equal(options.method, "POST");
     assert.equal(options.cache, "no-store");
     assert.equal(options.headers["content-type"], "application/json");
     assert.equal(options.headers["x-request-id"], "00000000-0000-4000-8000-000000000001");
     assert.ok(options.signal instanceof AbortSignal);
-    if (url === `${briefUrl}/v1/briefs/analyze`) return Response.json(scope);
-    assert.equal(url, `${estimatorUrl}/v1/estimates`);
-    const request = JSON.parse(options.body);
-    assert.deepEqual(request.scope, scope);
-    assert.deepEqual(request.answers, scope.initialAnswers);
-    assert.equal(request.historyPolicy, "demo");
-    return Response.json(estimate);
+    assert.equal(JSON.parse(options.body).parser, "sample");
+    return Response.json(scope);
   }),
 );
-assert.equal(successCalls.length, 2, "success must call both upstream services");
-assert.equal(successResponse.headers.get("cache-control"), "no-store");
-await collect("success", successResponse, 200);
+assert.equal(analysisCalls.length, 1, "analysis must call only Python and must not calculate an estimate");
+assert.equal(analysisResponse.headers.get("cache-control"), "no-store");
+await collect("analysis-success", analysisResponse, 200);
+
+const documentScope = { ...scope, source: { ...scope.source, name: "client-brief.txt", type: "txt" } };
+const documentForm = new FormData();
+documentForm.append("file", new File([sampleBrief], "client-brief.txt", { type: "text/plain" }));
+documentForm.append("parser", "sample");
+documentForm.append("capabilities", "[]");
+const documentAnalysisResponse = await handlePreviewRequest(
+  new Request("http://estimator.test/api/v1/preview", { method: "POST", body: documentForm }),
+  makeOptions(async (url, options) => {
+    assert.equal(url, `${briefUrl}/v1/briefs/analyze-document`);
+    assert.equal(options.method, "POST");
+    assert.equal(options.cache, "no-store");
+    assert.ok(options.body instanceof FormData);
+    assert.equal(options.body.get("file").name, "client-brief.txt");
+    assert.equal(options.body.get("parser"), "sample");
+    assert.equal(options.body.get("capabilities"), "[]");
+    return Response.json(documentScope);
+  }),
+);
+await collect("document-analysis-success", documentAnalysisResponse, 200);
 
 await collect(
   "malformed-json",
@@ -69,13 +85,12 @@ await collect(
 );
 
 await collect(
-  "ai-unconfigured",
-  await handlePreviewRequest(
-    makeRequest(JSON.stringify({ brief: sampleBrief, parser: "ai" })),
-    makeOptions(async () => {
-      throw new Error("AI-unconfigured response must not call an upstream service");
-    }),
-  ),
+  "ai-provider-error",
+  await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief, parser: "ai" })), makeOptions(async (url, options) => {
+    assert.equal(url, `${briefUrl}/v1/briefs/analyze`);
+    assert.equal(JSON.parse(options.body).parser, "ai");
+    return Response.json({ detail: "AI session permission is missing." }, { status: 503 });
+  })),
   503,
 );
 
@@ -94,18 +109,6 @@ await collect(
   )),
   503,
 );
-
-let estimatorCallCount = 0;
-await collect(
-  "estimator-error",
-  await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief })), makeOptions(async (url) => {
-    if (url === `${briefUrl}/v1/briefs/analyze`) return Response.json(scope);
-    estimatorCallCount += 1;
-    return Response.json({ error: "Invalid estimate request." }, { status: 422 });
-  })),
-  422,
-);
-assert.equal(estimatorCallCount, 1);
 
 await collect(
   "upstream-unavailable",
@@ -136,13 +139,77 @@ await collect(
   503,
 );
 
+const estimateBody = JSON.stringify({ reviewConfirmed: true, scope });
+const estimateCalls = [];
+const estimateResponse = await handleEstimateConfirmation(
+  makeRequest(estimateBody, "/api/v1/preview/estimate"),
+  makeOptions(async (url, options) => {
+    estimateCalls.push({ url, options });
+    assert.equal(url, `${estimatorUrl}/v1/estimates`);
+    assert.equal(options.method, "POST");
+    assert.equal(options.cache, "no-store");
+    assert.equal(options.headers["content-type"], "application/json");
+    const payload = JSON.parse(options.body);
+    assert.deepEqual(payload.scope, {
+      summary: scope.summary,
+      requirements: scope.requirements.map(({ id, title, evidence }) => ({ id, title, evidence })),
+      initialAnswers: scope.initialAnswers,
+      risks: scope.risks,
+      parser: scope.parser,
+    });
+    assert.deepEqual(payload.answers, scope.initialAnswers);
+    assert.equal(payload.historyPolicy, "demo");
+    return Response.json(estimate);
+  }),
+);
+assert.equal(estimateCalls.length, 1);
+await collect("estimate-success", estimateResponse, 200);
+
+const generalScope = {
+  ...scope,
+  estimateMode: "general",
+  requirements: scope.requirements.map((item, index) => ({ ...item, id: `work-${index + 1}`, complexity: "moderate" })),
+};
+const generalResponse = await handleEstimateConfirmation(
+  makeRequest(JSON.stringify({ reviewConfirmed: true, scope: generalScope }), "/api/v1/preview/estimate"),
+  makeOptions(async (url, options) => {
+    assert.equal(url, `${estimatorUrl}/v1/estimates/general`);
+    const payload = JSON.parse(options.body);
+    assert.deepEqual(payload.workPackages, generalScope.requirements.map(({ id, title, complexity }) => ({ id, title, complexity })));
+    return Response.json(estimate);
+  }),
+);
+await collect("general-estimate-success", generalResponse, 200);
+
+await collect(
+  "estimate-unconfirmed",
+  await handleEstimateConfirmation(makeRequest(JSON.stringify({ reviewConfirmed: false, scope }), "/api/v1/preview/estimate"), makeOptions(async () => {
+    throw new Error("unconfirmed scopes must not call Go");
+  })),
+  400,
+);
+
+const editedQuote = { ...scope, requirements: scope.requirements.map((item, index) => index === 0 ? { ...item, evidence: "Not in the client source" } : item) };
+await collect(
+  "estimate-invalid-evidence",
+  await handleEstimateConfirmation(makeRequest(JSON.stringify({ reviewConfirmed: true, scope: editedQuote }), "/api/v1/preview/estimate"), makeOptions(async () => {
+    throw new Error("unsupported evidence must not reach Go");
+  })),
+  422,
+);
+
+await collect(
+  "estimator-error",
+  await handleEstimateConfirmation(makeRequest(estimateBody, "/api/v1/preview/estimate"), makeOptions(async () =>
+    Response.json({ error: "Invalid estimate request." }, { status: 422 }),
+  )),
+  422,
+);
+
 await collect(
   "estimator-timeout",
-  await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief })), makeOptions(
-    async (url, { signal }) => {
-      if (url === `${briefUrl}/v1/briefs/analyze`) return Response.json(scope);
-      return waitForAbort(signal);
-    },
+  await handleEstimateConfirmation(makeRequest(estimateBody, "/api/v1/preview/estimate"), makeOptions(
+    async (_url, { signal }) => waitForAbort(signal),
     20,
   )),
   503,
