@@ -1,6 +1,8 @@
 import { baseHours, emptyAnswers, seedHistory, taskNames } from "./estimator-data.ts";
 import { categories } from "./estimator-types.ts";
-import type { Actuals, Answers, Category, Estimate, History, Project, Scope } from "./estimator-types.ts";
+import type { Actuals, Answers, Category, DriverKey, Estimate, History, Project, Scope } from "./estimator-types.ts";
+export const ENGINE_VERSION = "integration-effort/2.0";
+export const driverWeights: Record<DriverKey, number> = { direction: 3, api: 3, quality: 2, volume: 1, mapping: 2 };
 const round = (n: number) => Math.round(n * 10) / 10;
 function median(values: number[]) { const a = [...values].sort((x, y) => x - y); const m = Math.floor(a.length / 2); return a.length % 2 ? a[m] : (a[m - 1] + a[m]) / 2; }
 export function demoScope(brief: string): Scope {
@@ -26,11 +28,11 @@ export function demoScope(brief: string): Scope {
   return { summary: "Deliver a reliable connection between client systems and clean, reusable customer data.", requirements, initialAnswers, risks: ["Acceptance criteria and field mappings need delivery review.", "The client's requested date is a constraint, not a confirmed delivery commitment."], parser: "demo" };
 }
 export function similarity(a: Answers, b: Answers) {
-  const weights = { direction: 3, api: 3, quality: 2, volume: 1, mapping: 2 }; let matched = 0, known = 0;
+  const weights = driverWeights; let matched = 0, known = 0;
   for (const k of Object.keys(weights) as (keyof Answers)[]) if (a[k] !== "unknown") { known += weights[k]; if (a[k] === b[k]) matched += weights[k]; }
   return known ? matched / known : 0;
 }
-export function estimateProject(project: Pick<Project, "scope" | "answers" | "excluded">, history: History[]): Estimate {
+export function estimateProject(project: Pick<Project, "scope" | "answers" | "excluded"> & Partial<Pick<Project, "historyPolicy" | "id">>, history: History[]): Estimate {
   const a = project.answers;
   const included = new Set<Category>(["discovery", "mapping", "testing", "handover", ...project.scope.requirements.map(r => r.id)]);
   const syncIncluded = included.has("sync") && !project.excluded.includes("sync");
@@ -41,7 +43,9 @@ export function estimateProject(project: Pick<Project, "scope" | "answers" | "ex
   if (a.volume === "large") { bases.import *= 1.6; bases.testing *= 1.25; }
   if (a.volume === "small") bases.import *= 0.75;
   const unknown = Object.values(a).filter(v => v === "unknown").length;
-  const ranked = history.map(h => ({ ...h, score: similarity(a, h.features) })).sort((x, y) => y.score - x.score);
+  const historyPolicy = project.historyPolicy ?? "demo";
+  const eligible = history.filter(h => h.id !== project.id && (historyPolicy === "demo" || !h.synthetic));
+  const ranked = eligible.map(h => ({ ...h, score: similarity(a, h.features) })).sort((x, y) => y.score - x.score || x.id.localeCompare(y.id));
   const tasks = categories.filter(c => included.has(c)).map(category => {
     const comparable = ranked.filter(h => h.score >= 0.45 && (h.base[category] ?? 0) > 0 && Number.isFinite(h.actual[category]) && (h.actual[category] ?? 0) > 0);
     const ratios = comparable.map(h => Math.max(0.35, Math.min(3, h.actual[category]! / h.base[category]!)));
@@ -49,7 +53,7 @@ export function estimateProject(project: Pick<Project, "scope" | "answers" | "ex
     const factor = ratios.length ? 1 + support * (median(ratios) - 1) : 1;
     const hours = round(bases[category] * factor);
     const spread = ratios.length > 1 ? Math.max(...ratios) - Math.min(...ratios) : 0.4;
-    return { category, label: taskNames[category], base: round(bases[category]), factor: Math.round(factor * 100) / 100, hours, low: Math.floor(hours * Math.max(0.65, 0.85 - unknown * 0.025)), high: Math.ceil(hours * (1.18 + unknown * 0.075 + Math.min(0.35, spread / 3) + (ratios.length < 3 ? 0.12 : 0))), observations: ratios.length };
+    return { category, label: taskNames[category], base: round(bases[category]), factor: Math.round(factor * 100) / 100, hours, low: Math.floor(hours * Math.max(0.65, 0.85 - unknown * 0.025)), high: Math.ceil(hours * (1.18 + unknown * 0.075 + Math.min(0.35, spread / 3) + (ratios.length < 3 ? 0.12 : 0))), observations: ratios.length, referenceIds: comparable.map(h => h.id) };
   });
   const blockers = [];
   if (project.scope.requirements.every(r => project.excluded.includes(r.id))) blockers.push("Include at least one requested deliverable in the scope.");
@@ -59,8 +63,10 @@ export function estimateProject(project: Pick<Project, "scope" | "answers" | "ex
   if (a.mapping === "unknown") assumptions.push("Field mapping is provisionally standard; custom business rules are unconfirmed.");
   if (a.quality === "unknown") assumptions.push("Source data quality has not been assessed.");
   if (a.volume === "unknown") assumptions.push("Record volume is unconfirmed.");
+  if (historyPolicy === "recorded" && !tasks.some(t => t.observations)) assumptions.push("No comparable recorded delivery is available; base task assumptions are used.");
   return { tasks, hours: round(tasks.reduce((s, t) => s + t.hours, 0)), baseHours: round(tasks.reduce((s, t) => s + t.base, 0)), low: tasks.reduce((s, t) => s + t.low, 0), high: tasks.reduce((s, t) => s + t.high, 0), blockers, assumptions,
-    references: ranked.filter(h => h.score >= 0.45).slice(0, 3).map(h => ({ id: h.id, name: h.name, synthetic: h.synthetic, score: h.score, hours: round(Object.values(h.actual).reduce((s, n) => s + (n ?? 0), 0)) })) };
+    references: ranked.filter(h => h.score >= 0.45).slice(0, 3).map(h => ({ id: h.id, name: h.name, synthetic: h.synthetic, score: h.score, hours: round(Object.values(h.actual).reduce((s, n) => s + (n ?? 0), 0)), knownKeys: (Object.keys(a) as DriverKey[]).filter(k => a[k] !== "unknown"), matchedKeys: (Object.keys(a) as DriverKey[]).filter(k => a[k] !== "unknown" && a[k] === h.features[k]) })),
+    provenance: { engineVersion: ENGINE_VERSION, historyPolicy, similarityThreshold: 0.45, priorObservations: 4, ratioBounds: [0.35, 3], driverWeights: { ...driverWeights }, referenceIds: [...new Set(tasks.flatMap(t => t.referenceIds))].sort() } };
 }
 export function getHistory(projects: Project[]): History[] {
   return [...seedHistory, ...projects.filter(p => p.actuals && p.versions.length).map(p => {
@@ -77,5 +83,5 @@ export function validateActuals(estimate: Estimate, actuals: Actuals) {
 }
 export function scopeMatchesBaseline(p: Project) {
   const b = p.versions.at(-1);
-  return !!b && JSON.stringify(b.answers) === JSON.stringify(p.answers) && JSON.stringify([...b.excluded].sort()) === JSON.stringify([...p.excluded].sort()) && b.notes === p.notes;
+  return !!b && JSON.stringify(b.answers) === JSON.stringify(p.answers) && JSON.stringify([...b.excluded].sort()) === JSON.stringify([...p.excluded].sort()) && b.notes === p.notes && (b.historyPolicy ?? "demo") === (p.historyPolicy ?? "demo");
 }
