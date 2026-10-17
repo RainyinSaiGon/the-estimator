@@ -8,13 +8,14 @@
   "paths": {
     "/health/live": {
       "servers": [
+        { "url": "http://127.0.0.1:3000", "description": "Default local address for the Next.js web app" },
         { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
         { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
       ],
       "get": {
         "operationId": "checkServiceLiveness",
         "summary": "Check whether a service process is alive",
-        "description": "Both the Python brief service and Go estimator expose this path on their own service address.",
+        "description": "The Next.js web app, Python brief service and Go estimator expose this path on their own service address.",
         "responses": {
           "200": {
             "description": "The service process is alive.",
@@ -25,17 +26,22 @@
     },
     "/health/ready": {
       "servers": [
+        { "url": "http://127.0.0.1:3000", "description": "Default local address for the Next.js web app" },
         { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
         { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
       ],
       "get": {
         "operationId": "checkServiceReadiness",
         "summary": "Check whether a service can accept requests",
-        "description": "The Python brief service reports its parser; the Go estimator reports its engine version.",
+        "description": "The web app reports readiness after both preview APIs pass health checks. Python reports its parser; Go reports its engine version.",
         "responses": {
           "200": {
             "description": "Service-specific readiness information.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthReady" } } }
+          },
+          "503": {
+            "description": "The web app is alive but one or more preview APIs are not ready.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/WebServiceNotReady" } } }
           }
         }
       }
@@ -106,6 +112,10 @@
           "503": {
             "description": "Requested parser is not configured; choose sample.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PythonError" } } }
+          },
+          "504": {
+            "description": "Brief analysis exceeded the bounded request deadline.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PythonError" } } }
           }
         }
       }
@@ -135,6 +145,10 @@
           "422": {
             "description": "Invalid answers, history policy, requested requirement category, or exclusion category.",
             "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+          },
+          "503": {
+            "description": "Estimate exceeded the bounded request deadline.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
           }
         }
       }
@@ -150,9 +164,28 @@
       },
       "HealthReady": {
         "oneOf": [
+          { "$ref": "#/components/schemas/WebServiceReady" },
           { "$ref": "#/components/schemas/BriefServiceReady" },
           { "$ref": "#/components/schemas/EstimatorServiceReady" }
         ]
+      },
+      "WebServiceReady": {
+        "type": "object",
+        "properties": {
+          "status": { "const": "ready" },
+          "service": { "const": "web" }
+        },
+        "required": ["status", "service"],
+        "additionalProperties": false
+      },
+      "WebServiceNotReady": {
+        "type": "object",
+        "properties": {
+          "status": { "const": "not_ready" },
+          "service": { "const": "web" }
+        },
+        "required": ["status", "service"],
+        "additionalProperties": false
       },
       "BriefServiceReady": {
         "type": "object",

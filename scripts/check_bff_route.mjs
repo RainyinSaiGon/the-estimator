@@ -17,7 +17,7 @@ function makeRequest(body) {
 }
 
 function makeOptions(fetchImpl, timeoutMs = 1000) {
-  return { fetchImpl, timeoutMs, briefUrl, estimatorUrl };
+  return { fetchImpl, timeoutMs, briefUrl, estimatorUrl, requestId: "00000000-0000-4000-8000-000000000001" };
 }
 
 const results = [];
@@ -36,6 +36,7 @@ const successResponse = await handlePreviewRequest(
     assert.equal(options.method, "POST");
     assert.equal(options.cache, "no-store");
     assert.equal(options.headers["content-type"], "application/json");
+    assert.equal(options.headers["x-request-id"], "00000000-0000-4000-8000-000000000001");
     assert.ok(options.signal instanceof AbortSignal);
     if (url === `${briefUrl}/v1/briefs/analyze`) return Response.json(scope);
     assert.equal(url, `${estimatorUrl}/v1/estimates`);
@@ -84,6 +85,14 @@ await collect(
     Response.json({ detail: "This brief is not supported." }, { status: 422 }),
   )),
   422,
+);
+
+await collect(
+  "python-timeout-response",
+  await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief })), makeOptions(async () =>
+    Response.json({ detail: "Service request timed out." }, { status: 504 }),
+  )),
+  503,
 );
 
 let estimatorCallCount = 0;

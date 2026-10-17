@@ -1,14 +1,21 @@
 package main
 
 import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"sort"
+	"strings"
+	"syscall"
 	"time"
 )
 
@@ -94,9 +101,32 @@ var driverWeights = map[string]float64{"direction": 3, "api": 3, "quality": 2, "
 var baseHours = map[string]float64{"discovery": 5, "authentication": 8, "mapping": 10, "import": 12, "sync": 16, "deduplication": 8, "testing": 12, "handover": 6}
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+		switch attr.Key {
+		case slog.TimeKey:
+			return slog.String("timestamp", attr.Value.Time().UTC().Format(time.RFC3339Nano))
+		case slog.LevelKey:
+			return slog.String("severity", strings.ToLower(attr.Value.String()))
+		case slog.MessageKey:
+			return slog.String("event", attr.Value.String())
+		default:
+			return attr
+		}
+	}})))
+
+	host := envOrDefault("HOST", "127.0.0.1")
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8002"
+	}
+	requestTimeout, err := configuredTimeout("REQUEST_TIMEOUT", 8*time.Second, 30*time.Second)
+	if err != nil {
+		slog.Error("invalid_server_configuration", "service", "estimator-go", "setting", "REQUEST_TIMEOUT")
+		os.Exit(2)
+	}
+	readHeaderTimeout := 5 * time.Second
+	if requestTimeout < readHeaderTimeout {
+		readHeaderTimeout = requestTimeout
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health/live", func(w http.ResponseWriter, _ *http.Request) {
@@ -106,10 +136,157 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "engine": "integration-effort/2.0"})
 	})
 	mux.HandleFunc("POST /v1/estimates", estimateHandler)
-	server := &http.Server{Addr: ":" + port, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, WriteTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second}
-	log.Printf("estimator listening on :%s", port)
-	log.Fatal(server.ListenAndServe())
+	server := &http.Server{
+		Addr:              net.JoinHostPort(host, port),
+		Handler:           requestLogging(jsonTimeoutHandler(requestTimeout, mux)),
+		ReadHeaderTimeout: readHeaderTimeout,
+		ReadTimeout:       requestTimeout,
+		WriteTimeout:      requestTimeout + time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+	}
+
+	shutdownContext, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stopSignals()
+	go func() {
+		<-shutdownContext.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := server.Shutdown(ctx); err != nil {
+			slog.Error("server_shutdown_failed", "service", "estimator-go", "error", err.Error())
+		} else {
+			slog.Info("server_shutdown", "service", "estimator-go")
+		}
+	}()
+
+	slog.Info("server_start", "service", "estimator-go", "address", server.Addr, "request_timeout_ms", requestTimeout.Milliseconds())
+	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		slog.Error("server_failed", "service", "estimator-go", "error", err.Error())
+		os.Exit(1)
+	}
 }
+
+func jsonTimeoutHandler(timeout time.Duration, next http.Handler) http.Handler {
+	timed := http.TimeoutHandler(next, timeout, `{"error":"Service request timed out."}`)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		timed.ServeHTTP(&timeoutResponseWriter{ResponseWriter: w}, r)
+	})
+}
+
+type timeoutResponseWriter struct {
+	http.ResponseWriter
+}
+
+func (w *timeoutResponseWriter) WriteHeader(status int) {
+	if status == http.StatusServiceUnavailable {
+		w.Header().Set("content-type", "application/json")
+	}
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *timeoutResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func envOrDefault(name, fallback string) string {
+	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+		return value
+	}
+	return fallback
+}
+
+func configuredTimeout(name string, fallback, maximum time.Duration) (time.Duration, error) {
+	value := strings.TrimSpace(os.Getenv(name))
+	if value == "" {
+		return fallback, nil
+	}
+	parsed, err := time.ParseDuration(value)
+	if err != nil || parsed < time.Second || parsed > maximum {
+		return 0, fmt.Errorf("%s must be between 1s and %s", name, maximum)
+	}
+	return parsed, nil
+}
+
+func requestLogging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		id := r.Header.Get("X-Request-ID")
+		if !validRequestID(id) {
+			id = newRequestID()
+		}
+		w.Header().Set("X-Request-ID", id)
+		recorder := &responseRecorder{ResponseWriter: w, status: http.StatusOK}
+		startedAt := time.Now()
+		panicRecovered := false
+		defer func() {
+			if recover() != nil {
+				panicRecovered = true
+				if !recorder.wroteHeader {
+					writeJSON(recorder, http.StatusInternalServerError, map[string]string{"error": "Internal server error."})
+				}
+			}
+			level := slog.LevelInfo
+			if recorder.status >= http.StatusInternalServerError {
+				level = slog.LevelError
+			}
+			slog.Log(r.Context(), level, "http_request",
+				"service", "estimator-go",
+				"request_id", id,
+				"method", r.Method,
+				"path", r.URL.Path,
+				"status", recorder.status,
+				"duration_ms", float64(time.Since(startedAt).Microseconds())/1000,
+				"panic_recovered", panicRecovered,
+			)
+		}()
+		next.ServeHTTP(recorder, r)
+	})
+}
+
+func validRequestID(value string) bool {
+	normalized := value
+	if len(value) == 36 {
+		for _, index := range []int{8, 13, 18, 23} {
+			if value[index] != '-' {
+				return false
+			}
+		}
+		normalized = strings.ReplaceAll(value, "-", "")
+	} else if len(value) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(normalized)
+	return err == nil
+}
+
+func newRequestID() string {
+	var random [16]byte
+	if _, err := rand.Read(random[:]); err == nil {
+		return hex.EncodeToString(random[:])
+	}
+	return fmt.Sprintf("%032x", time.Now().UTC().UnixNano())
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	status      int
+	wroteHeader bool
+}
+
+func (w *responseRecorder) WriteHeader(status int) {
+	if w.wroteHeader {
+		return
+	}
+	w.status = status
+	w.wroteHeader = true
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *responseRecorder) Write(body []byte) (int, error) {
+	if !w.wroteHeader {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(body)
+}
+
+func (w *responseRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func estimateHandler(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -458,5 +635,3 @@ func seedHistory() []History {
 	}
 	return rows
 }
-
-func init() { log.SetFlags(log.LstdFlags | log.LUTC) }
