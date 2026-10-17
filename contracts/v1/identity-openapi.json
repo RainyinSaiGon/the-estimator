@@ -1,0 +1,214 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "The Estimator first-party identity API",
+    "version": "1.0.0",
+    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records."
+  },
+  "servers": [
+    {
+      "url": "http://identity:8003",
+      "description": "Internal Docker Compose address; never publish this service directly."
+    }
+  ],
+  "paths": {
+    "/health/live": {
+      "get": {
+        "operationId": "identityLiveness",
+        "summary": "Check whether the identity process is alive",
+        "responses": {
+          "200": {
+            "description": "The service process is alive.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Live" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "operationId": "identityReadiness",
+        "summary": "Check identity storage readiness",
+        "responses": {
+          "200": {
+            "description": "The identity database is reachable.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Ready" }
+              }
+            }
+          },
+          "503": {
+            "description": "The identity database is not ready."
+          }
+        }
+      }
+    },
+    "/v1/accounts": {
+      "post": {
+        "operationId": "createAccount",
+        "summary": "Create an account and its first session",
+        "security": [{ "serviceSecret": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateAccount" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The account and session were created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionCreated" }
+              }
+            }
+          },
+          "400": { "description": "The account request is invalid." },
+          "409": { "description": "The account could not be created with these details." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "post": {
+        "operationId": "createSession",
+        "summary": "Verify account credentials and create a session",
+        "security": [{ "serviceSecret": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CreateSession" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The session was created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionCreated" }
+              }
+            }
+          },
+          "400": { "description": "The request is invalid." },
+          "401": { "description": "Credentials are invalid." },
+          "429": { "description": "Sign-in attempts are temporarily limited." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
+    },
+    "/v1/session": {
+      "get": {
+        "operationId": "inspectSession",
+        "summary": "Resolve a session to its stable account identity",
+        "description": "Only the BFF or another trusted internal service may call this operation. It is the server-side identity check used before accessing owner-scoped resources.",
+        "security": [{ "serviceSecret": [], "sessionBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "The session is valid.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Session" }
+              }
+            }
+          },
+          "401": { "description": "The session is missing, expired, or revoked." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      },
+      "delete": {
+        "operationId": "revokeSession",
+        "summary": "Revoke the current session",
+        "security": [{ "serviceSecret": [], "sessionBearer": [] }],
+        "responses": {
+          "204": { "description": "The session was revoked or was already absent." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "serviceSecret": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "X-Identity-BFF-Secret"
+      },
+      "sessionBearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "Opaque random token"
+      }
+    },
+    "schemas": {
+      "Account": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["accountId", "email", "displayName"],
+        "properties": {
+          "accountId": { "type": "string", "format": "uuid" },
+          "email": { "type": "string", "format": "email", "maxLength": 254 },
+          "displayName": { "type": "string", "maxLength": 100 }
+        }
+      },
+      "CreateAccount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "displayName", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "maxLength": 254 },
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
+          "password": { "type": "string", "minLength": 12, "maxLength": 1024 }
+        }
+      },
+      "CreateSession": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email", "password"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "maxLength": 254 },
+          "password": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      },
+      "SessionCreated": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account", "sessionToken", "expiresAt"],
+        "properties": {
+          "account": { "$ref": "#/components/schemas/Account" },
+          "sessionToken": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Session": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["account", "expiresAt"],
+        "properties": {
+          "account": { "$ref": "#/components/schemas/Account" },
+          "expiresAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "Live": {
+        "type": "object",
+        "required": ["status"],
+        "properties": { "status": { "const": "ok" } }
+      },
+      "Ready": {
+        "type": "object",
+        "required": ["status", "service"],
+        "properties": {
+          "status": { "const": "ready" },
+          "service": { "const": "identity-go" }
+        }
+      }
+    }
+  }
+}

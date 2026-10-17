@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import type { IdentityAccount } from "../../lib/identity";
 
 const sampleBrief = `Hi team,
 
@@ -56,7 +57,7 @@ function hasSourceEvidence(source: string, quote: string) {
   return normalizedQuote.length > 0 && normalizedEvidence(source).includes(normalizedQuote);
 }
 
-export default function EstimateWorkbench() {
+export default function EstimateWorkbench({ identityEnabled = false, account = null }: { identityEnabled?: boolean; account?: IdentityAccount | null }) {
   const [brief, setBrief] = useState(sampleBrief);
   const [file, setFile] = useState<File | null>(null);
   const [parser, setParser] = useState<Parser>("ai");
@@ -150,7 +151,7 @@ export default function EstimateWorkbench() {
   return <main className="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-10">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · not saved</span>
+      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · not saved</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
     </header>
 
     <div className="grid gap-8 py-8 lg:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)] lg:gap-10">

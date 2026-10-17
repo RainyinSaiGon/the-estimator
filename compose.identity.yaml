@@ -1,0 +1,42 @@
+services:
+  web:
+    environment:
+      IDENTITY_SERVICE_URL: http://identity:8003
+      IDENTITY_BFF_SHARED_SECRET: ${IDENTITY_BFF_SHARED_SECRET:?Set IDENTITY_BFF_SHARED_SECRET in ignored .env.local}
+    depends_on:
+      identity:
+        condition: service_healthy
+
+  identity-db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: estimator_identity
+      POSTGRES_USER: estimator_identity
+      POSTGRES_PASSWORD: ${IDENTITY_POSTGRES_PASSWORD:?Set IDENTITY_POSTGRES_PASSWORD in ignored .env.local}
+    volumes:
+      - estimator-identity-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U estimator_identity -d estimator_identity"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  identity:
+    build:
+      context: .
+      dockerfile: services/identity-go/Dockerfile
+    expose:
+      - "8003"
+    environment:
+      HOST: 0.0.0.0
+      PORT: "8003"
+      REQUEST_TIMEOUT: 5s
+      IDENTITY_DATABASE_URL: postgres://estimator_identity:${IDENTITY_POSTGRES_PASSWORD}@identity-db:5432/estimator_identity?sslmode=disable
+      IDENTITY_BFF_SHARED_SECRET: ${IDENTITY_BFF_SHARED_SECRET:?Set IDENTITY_BFF_SHARED_SECRET in ignored .env.local}
+      IDENTITY_SESSION_TTL: 8h
+    depends_on:
+      identity-db:
+        condition: service_healthy
+
+volumes:
+  estimator-identity-data:

@@ -107,6 +107,16 @@ npm run check:contracts
 
 Unit checks exercise evidence matching, missing information, deterministic estimates, scope exclusions, history adjustments, sparse-data uncertainty, baseline changes and invalid actual hours. Browser checks exercise the full stored workflow. See `docs/demo-script.md` for a reproducible walkthrough.
 
+### Optional first-party identity preview
+
+To run the local Go identity service, copy .env.example to the ignored .env.local file and set two separate URL-safe random values: IDENTITY_POSTGRES_PASSWORD and IDENTITY_BFF_SHARED_SECRET (at least 32 random bytes). Keep the database password URL-safe because Compose uses it in a local PostgreSQL connection URL.
+
+Start the local stack with:
+
+docker compose --env-file .env.local -f compose.yaml -f compose.identity.yaml up --build
+
+Open /sign-in to create two fictional local accounts and inspect /account. The identity service owns credentials and sessions, while the BFF keeps session tokens in an HttpOnly cookie. PostgreSQL is not published to the host. The sample estimate preview remains unsaved; identity sign-in alone does not make estimates persistent. This prototype has no email verification, recovery, MFA or distributed abuse controls and must not be used for production accounts or real client data. Existing hosted authentication and traffic are unchanged.
+
 ## How the numbers work
 The language model extracts requirements and confirmed facts, not hours. A separate numeric engine starts from explicit task base hours and adjusts them for direction, API readiness, mapping, quality and volume.
 

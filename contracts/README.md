@@ -1,5 +1,7 @@
 # Preview API contracts
 
+The v1/identity-openapi.json document is the internal OpenAPI 3.1 contract for the first-party Go identity service. It covers account creation, session creation, session validation/revocation and service health. It is an internal BFF/service contract; the browser must never call the Go identity API directly.
+
 `v1/openapi.json` is the shared OpenAPI 3.1 contract for:
 
 - `POST /api/v1/preview` in the Next.js BFF;
