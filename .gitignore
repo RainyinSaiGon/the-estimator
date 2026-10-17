@@ -15,6 +15,7 @@
 
 # next.js
 /.next/
+/apps/web/.next/
 /.vinext/
 /out/
 
@@ -49,6 +50,8 @@ next-env.d.ts
 
 /dist/
 /.wrangler/
+**/__pycache__/
+*.py[cod]
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/
 /.agents/
