@@ -18,6 +18,8 @@ npm run check:contracts
 
 The checker validates the OpenAPI document and component schemas, builds and starts the actual Go and Python services on temporary loopback ports, sends a representative integration brief through both endpoints, and checks their success and error JSON against the shared schemas. It checks the BFF request and composed response schemas using those live service payloads. No external network calls, API keys, database, or production services are used. Go 1.26+ is required to build the estimator.
 
+The same command validates each service's liveness and readiness responses and exercises the actual Next.js preview route with controlled upstream responses. It covers validation errors, unsupported AI mode, downstream Python/Go rejection, upstream unavailability, and separate timeouts at the Python and Go calls. The BFF route check uses Node's built-in web APIs and does not start a browser or web server.
+
 ## Evolution rules
 
 - Keep the route prefixes at `/api/v1` and `/v1` until a separately reviewed compatibility plan authorizes a breaking change.

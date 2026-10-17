@@ -2,10 +2,44 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "description": "Versioned wire contracts for the Next.js preview BFF, Python brief analysis service, and Go effort estimator. These contracts describe the current preview flow and do not imply production client-data persistence or hosted AI availability."
   },
   "paths": {
+    "/health/live": {
+      "servers": [
+        { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
+        { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
+      ],
+      "get": {
+        "operationId": "checkServiceLiveness",
+        "summary": "Check whether a service process is alive",
+        "description": "Both the Python brief service and Go estimator expose this path on their own service address.",
+        "responses": {
+          "200": {
+            "description": "The service process is alive.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthLive" } } }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "servers": [
+        { "url": "http://127.0.0.1:8001", "description": "Default local address for the Python brief service" },
+        { "url": "http://127.0.0.1:8002", "description": "Default local address for the Go estimator" }
+      ],
+      "get": {
+        "operationId": "checkServiceReadiness",
+        "summary": "Check whether a service can accept requests",
+        "description": "The Python brief service reports its parser; the Go estimator reports its engine version.",
+        "responses": {
+          "200": {
+            "description": "Service-specific readiness information.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/HealthReady" } } }
+          }
+        }
+      }
+    },
     "/api/v1/preview": {
       "post": {
         "operationId": "createPreview",
@@ -108,6 +142,36 @@
   },
   "components": {
     "schemas": {
+      "HealthLive": {
+        "type": "object",
+        "properties": { "status": { "const": "ok" } },
+        "required": ["status"],
+        "additionalProperties": false
+      },
+      "HealthReady": {
+        "oneOf": [
+          { "$ref": "#/components/schemas/BriefServiceReady" },
+          { "$ref": "#/components/schemas/EstimatorServiceReady" }
+        ]
+      },
+      "BriefServiceReady": {
+        "type": "object",
+        "properties": {
+          "status": { "const": "ready" },
+          "parser": { "const": "sample" }
+        },
+        "required": ["status", "parser"],
+        "additionalProperties": false
+      },
+      "EstimatorServiceReady": {
+        "type": "object",
+        "properties": {
+          "status": { "const": "ready" },
+          "engine": { "const": "integration-effort/2.0" }
+        },
+        "required": ["status", "engine"],
+        "additionalProperties": false
+      },
       "PreviewRequest": {
         "type": "object",
         "properties": {
