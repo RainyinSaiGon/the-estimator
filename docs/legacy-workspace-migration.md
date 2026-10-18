@@ -38,7 +38,7 @@ go run ./cmd/estimator migrate-legacy --input export.jsonl --owner-map owner-map
 
 The extra environment gate is required for writes. Each record is encrypted and committed together with a migration-ledger entry. Stable source IDs make retries idempotent. An identical imported row is skipped; a changed source row under the same migration key is rejected for review. Historical snapshots and actuals remain in the encrypted `legacyImport.originalProject` archive and keep their original synthetic labels; their learning provenance remains `legacy-unknown` and they are not automatically calibration eligible.
 
-Rollback removes only records with ledger entries derived from the supplied source IDs. The original export is never changed:
+Rollback removes only ledger-managed records when the supplied source row still matches the imported source digest and the encrypted record still matches its import-time digest. A changed export, edited title, or later delivery update is rejected for manual reconciliation; the importer keeps that record. The original export is never changed:
 
 ```powershell
 go run ./cmd/estimator migrate-legacy --input export.jsonl --owner-map owner-map.json --apply --rollback

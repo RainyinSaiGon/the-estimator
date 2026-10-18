@@ -46,7 +46,8 @@ type Estimate = {
 };
 type PrivateRecordSummary = { id: string; title: string; createdAt: string; expiresAt: string };
 type PrivateBaseline = { id: string; createdAt: string; sha256: string; engineVersion: string; policyVersion: string; evaluationSplit: "training" | "holdout" | "unassigned"; workPackageIds: string[] };
-type PrivateDeliveryOutcome = { baselineId: string; baselineSha256: string; completedAt: string; actualHours: Record<string, number>; additionalScopeHours: number; synthetic: boolean; evidenceSource: string; evidenceReference: string; reviewStatus: "pending" | "approved" | "rejected"; evaluationSplit: string; calibrationEligible: boolean; calibrationReason: string; reviewDecisions: { actorId: string; decision: string; note?: string; at: string }[] };
+type PrivateDeliveryOutcome = { baselineId: string; baselineSha256: string; submittedBy: string; reviewerId: string; completedAt: string; actualHours: Record<string, number>; additionalScopeHours: number; synthetic: boolean; evidenceSource: string; evidenceReference: string; reviewStatus: "pending" | "approved" | "rejected"; evaluationSplit: string; calibrationEligible: boolean; calibrationReason: string; reviewDecisions: { actorId: string; decision: string; note?: string; at: string }[] };
+type PrivateDeliveryReviewView = { recordId: string; source: Scope["source"]; reviewedScope: Scope; estimate: Estimate; baseline: PrivateBaseline; deliveryOutcome: PrivateDeliveryOutcome };
 type PrivateRecordSnapshot = {
   schemaVersion: 1 | 2;
   title: string;
@@ -93,7 +94,7 @@ async function fileContentBase64(file: File) {
   return btoa(chunks.join(""));
 }
 
-export default function EstimateWorkbench({ identityEnabled = false, account = null }: { identityEnabled?: boolean; account?: IdentityAccount | null }) {
+export default function EstimateWorkbench({ identityEnabled = false, account = null, initialReviewRecordId = "" }: { identityEnabled?: boolean; account?: IdentityAccount | null; initialReviewRecordId?: string }) {
   const router = useRouter();
   const [brief, setBrief] = useState(sampleBrief);
   const [file, setFile] = useState<File | null>(null);
@@ -120,7 +121,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [deliverySynthetic, setDeliverySynthetic] = useState(false);
   const [deliveryEvidenceSource, setDeliveryEvidenceSource] = useState("manual-reviewed");
   const [deliveryEvidenceReference, setDeliveryEvidenceReference] = useState("");
+  const [deliveryReviewerId, setDeliveryReviewerId] = useState("");
   const [deliveryReviewNote, setDeliveryReviewNote] = useState("");
+  const [reviewRecordId, setReviewRecordId] = useState(initialReviewRecordId);
+  const [deliveryReviewView, setDeliveryReviewView] = useState<PrivateDeliveryReviewView | null>(null);
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
 
   async function signOut() {
@@ -316,6 +320,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       setDeliverySynthetic(snapshot.deliveryOutcome?.synthetic ?? false);
       setDeliveryEvidenceSource(snapshot.deliveryOutcome?.evidenceSource ?? "manual-reviewed");
       setDeliveryEvidenceReference(snapshot.deliveryOutcome?.evidenceReference ?? "");
+      setDeliveryReviewerId(snapshot.deliveryOutcome?.reviewerId ?? "");
       setReviewConfirmed(true);
       setBrief(source.reviewText);
       setFile(null);
@@ -349,6 +354,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
         body: JSON.stringify({
           baselineId: baseline.id,
           baselineSha256: baseline.sha256,
+          reviewerId: deliveryReviewerId.trim(),
           completedAt: (deliveryDate === localDateInputValue() ? new Date() : new Date(`${deliveryDate}T23:59:59`)).toISOString(),
           actualHours: Object.fromEntries(Object.entries(actualHours).map(([id, value]) => [id, Number(value)])),
           additionalScopeHours: Number(additionalScopeHours),
@@ -370,23 +376,53 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   }
 
   async function reviewDeliveryOutcome(decision: "approved" | "rejected") {
-    if (!activeRecordId || !activeSnapshot?.deliveryOutcome || !deliveryReviewNote.trim()) return;
-    setRecordAction(activeRecordId);
+    if (!deliveryReviewView || !deliveryReviewNote.trim()) return;
+    const reviewID = deliveryReviewView.recordId;
+    setRecordAction(reviewID);
     setRecordsMessage("");
     try {
-      const response = await fetch(`/api/v1/records/${encodeURIComponent(activeRecordId)}/delivery/review`, {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(reviewID)}/delivery/review`, {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ decision, note: deliveryReviewNote.trim() }),
       });
       const result = await response.json().catch(() => ({})) as { deliveryOutcome?: PrivateDeliveryOutcome; error?: string };
       if (!response.ok || !result.deliveryOutcome) throw new Error(result.error ?? "The delivery review could not be saved.");
-      setActiveSnapshot({ ...activeSnapshot, deliveryOutcome: result.deliveryOutcome });
+      setDeliveryReviewView({ ...deliveryReviewView, deliveryOutcome: result.deliveryOutcome });
       setRecordsMessage(decision === "approved" ? "Delivery review approved and recorded." : "Delivery review rejected and recorded.");
     } catch (cause) {
       setRecordsMessage(cause instanceof Error ? cause.message : "The delivery review could not be saved.");
     } finally {
       setRecordAction(null);
+    }
+  }
+
+  async function loadDeliveryReview() {
+    const recordId = reviewRecordId.trim();
+    if (!recordId) return;
+    setRecordAction(recordId);
+    setRecordsMessage("");
+    setDeliveryReviewView(null);
+    try {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(recordId)}/delivery/review`, { cache: "no-store" });
+      const result = await response.json().catch(() => ({})) as { recordId?: string; source?: Scope["source"]; reviewedScope?: Scope; estimate?: Estimate; baseline?: PrivateBaseline; deliveryOutcome?: PrivateDeliveryOutcome; error?: string };
+      if (!response.ok || !result.recordId || !result.source || !result.reviewedScope || !result.estimate || !result.baseline || !result.deliveryOutcome) throw new Error(result.error ?? "This delivery review is not assigned to your account.");
+      setDeliveryReviewView({ recordId: result.recordId, source: result.source, reviewedScope: result.reviewedScope, estimate: result.estimate, baseline: result.baseline, deliveryOutcome: result.deliveryOutcome });
+      setDeliveryReviewNote("");
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The delivery review could not be loaded.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
+  async function copyDeliveryReviewLink(recordId: string) {
+    const link = new URL(`/estimate?reviewDelivery=${encodeURIComponent(recordId)}#independent-delivery-review`, window.location.origin).toString();
+    try {
+      await navigator.clipboard.writeText(link);
+      setRecordsMessage("Independent review link copied. Send it to the assigned reviewer.");
+    } catch {
+      setRecordsMessage(`Share this independent review link with the assigned reviewer: ${link}`);
     }
   }
 
@@ -543,10 +579,11 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
                 <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-[var(--muted)]">Added-scope hours<input type="number" min="0" step="0.1" value={additionalScopeHours} onChange={(event) => setAdditionalScopeHours(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><label className="text-xs font-medium text-[var(--muted)]">Delivery completion date<input type="date" max={localDateInputValue()} value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label></div>
                 <label className="flex items-center gap-2 text-xs text-[var(--muted)]"><input type="checkbox" checked={deliverySynthetic} onChange={(event) => setDeliverySynthetic(event.target.checked)} className="size-4 accent-black" />Synthetic example (always excluded from recorded calibration)</label>
                 {!deliverySynthetic && <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-[var(--muted)]">Evidence source<select value={deliveryEvidenceSource} onChange={(event) => setDeliveryEvidenceSource(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]"><option value="timesheet">Timesheet</option><option value="client-confirmed">Client confirmed</option><option value="manual-reviewed">Manually reviewed record</option><option value="unknown">Unknown</option></select></label><label className="text-xs font-medium text-[var(--muted)]">Evidence reference<input value={deliveryEvidenceReference} maxLength={500} onChange={(event) => setDeliveryEvidenceReference(event.target.value)} placeholder="Private reference, ticket, or note" className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label></div>}
-                <button type="button" onClick={recordDeliveryOutcome} disabled={recordAction !== null || Object.values(actualHours).some((value) => value.trim() === "" || !Number.isFinite(Number(value)) || Number(value) < 0) || !Number.isFinite(Number(additionalScopeHours)) || Number(additionalScopeHours) < 0 || (!deliverySynthetic && deliveryEvidenceSource !== "unknown" && deliveryEvidenceReference.trim().length < 3)} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">Record delivery outcome</button>
+                <label className="block max-w-xl text-xs font-medium text-[var(--muted)]">Independent reviewer account ID<input required value={deliveryReviewerId} maxLength={36} onChange={(event) => setDeliveryReviewerId(event.target.value)} placeholder="UUID from the reviewer" className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /><span className="mt-1 block font-normal">The reviewer must sign in to their own account and must not be the person recording these actuals.</span></label>
+                <button type="button" onClick={recordDeliveryOutcome} disabled={recordAction !== null || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(deliveryReviewerId.trim()) || deliveryReviewerId.trim().toLowerCase() === account?.accountId.toLowerCase() || Object.values(actualHours).some((value) => value.trim() === "" || !Number.isFinite(Number(value)) || Number(value) < 0) || !Number.isFinite(Number(additionalScopeHours)) || Number(additionalScopeHours) < 0 || (!deliverySynthetic && deliveryEvidenceSource !== "unknown" && deliveryEvidenceReference.trim().length < 3)} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">Record delivery outcome</button>
               </div> : <div className="mt-4 space-y-3 rounded-xl bg-[var(--paper)] p-4">
                 <p className="text-sm font-medium">Review status: {activeSnapshot.deliveryOutcome.reviewStatus}</p><p className="text-xs leading-5 text-[var(--muted)]">Original-scope actual: {Object.values(activeSnapshot.deliveryOutcome.actualHours).reduce((sum, value) => sum + value, 0)}h · added scope: {activeSnapshot.deliveryOutcome.additionalScopeHours}h · calibration: {activeSnapshot.deliveryOutcome.calibrationEligible ? "eligible" : activeSnapshot.deliveryOutcome.calibrationReason}</p>
-                {activeSnapshot.deliveryOutcome.reviewStatus === "pending" && <><label className="block text-xs font-medium text-[var(--muted)]">Review note<textarea value={deliveryReviewNote} maxLength={1000} onChange={(event) => setDeliveryReviewNote(event.target.value)} className="mt-1 min-h-20 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" placeholder="Confirm source quality and task reconciliation, or explain rejection." /></label><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void reviewDeliveryOutcome("approved")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white disabled:opacity-50">Approve outcome</button><button type="button" onClick={() => void reviewDeliveryOutcome("rejected")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] disabled:opacity-50">Reject outcome</button></div></>}
+                {activeSnapshot.deliveryOutcome.reviewStatus === "pending" && <div className="rounded-lg border border-[var(--line)] bg-white p-3 text-xs leading-5 text-[var(--muted)]"><p>Assigned independent reviewer: {activeSnapshot.deliveryOutcome.reviewerId}</p><button type="button" onClick={() => void copyDeliveryReviewLink(activeRecordId)} className="mt-2 rounded-full border border-[var(--line)] px-3 py-1.5 font-medium text-[var(--ink)]">Copy reviewer link</button></div>}
                 {activeSnapshot.deliveryOutcome.reviewDecisions.map((decision, index) => <p key={`${decision.actorId}-${index}`} className="text-xs text-[var(--muted)]">{decision.decision} · {new Date(decision.at).toLocaleString()} · {decision.note}</p>)}
               </div>}
             </div>}
@@ -558,6 +595,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
 
     <section className="border-t border-[var(--line)] py-8">
       <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut()} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
+      {account?.accountId && <p className="mt-3 text-xs text-[var(--muted)]">Your account ID, for independent review assignments: {account.accountId}</p>}
+      {identityEnabled && <div id="independent-delivery-review" className="mt-5 rounded-2xl border border-[var(--line)] p-5"><h3 className="text-sm font-semibold">Independent delivery review</h3><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Open a review link while signed in to the assigned reviewer account. The service reveals only the estimate assigned to that account.</p><div className="mt-3 flex flex-wrap gap-2"><input aria-label="Delivery review record ID" value={reviewRecordId} onChange={(event) => setReviewRecordId(event.target.value)} className="min-w-64 flex-1 rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" placeholder="Paste the record ID from the review link" /><button type="button" onClick={() => void loadDeliveryReview()} disabled={recordAction !== null || !reviewRecordId.trim()} className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white disabled:opacity-50">{recordAction === reviewRecordId ? "Loading…" : "Load review"}</button></div>
+        {deliveryReviewView && <div className="mt-4 space-y-3 rounded-xl bg-[var(--paper)] p-4"><p className="text-sm font-medium">Review delivery for estimate {deliveryReviewView.recordId}</p><p className="whitespace-pre-wrap text-xs leading-5 text-[var(--muted)]">{deliveryReviewView.source.reviewText}</p><ul className="space-y-1 text-xs leading-5 text-[var(--muted)]">{deliveryReviewView.reviewedScope.requirements.map((item) => <li key={item.id}><span className="font-medium text-[var(--ink)]">{item.title}:</span> “{item.evidence}”</li>)}</ul><div className="grid gap-2 sm:grid-cols-2">{deliveryReviewView.estimate.tasks.map((task) => <p key={task.category} className="rounded-lg border border-[var(--line)] bg-white p-3 text-xs">{task.label}: estimated {task.hours}h · actual {deliveryReviewView.deliveryOutcome.actualHours[task.category]}h</p>)}</div><p className="text-xs text-[var(--muted)]">Added-scope actual: {deliveryReviewView.deliveryOutcome.additionalScopeHours}h · evidence: {deliveryReviewView.deliveryOutcome.evidenceSource} · reference: {deliveryReviewView.deliveryOutcome.evidenceReference}</p>{deliveryReviewView.deliveryOutcome.reviewStatus === "pending" && <><label className="block text-xs font-medium text-[var(--muted)]">Review note<textarea value={deliveryReviewNote} maxLength={1000} onChange={(event) => setDeliveryReviewNote(event.target.value)} className="mt-1 min-h-20 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" placeholder="Confirm the source and task reconciliation, or explain rejection." /></label><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void reviewDeliveryOutcome("approved")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white disabled:opacity-50">Approve outcome</button><button type="button" onClick={() => void reviewDeliveryOutcome("rejected")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] disabled:opacity-50">Reject outcome</button></div></>}{deliveryReviewView.deliveryOutcome.reviewDecisions.map((decision, index) => <p key={`${decision.actorId}-${index}`} className="text-xs text-[var(--muted)]">{decision.decision} · {new Date(decision.at).toLocaleString()} · {decision.note}</p>)}</div>}
+      </div>}
       {!recordStatus?.recordsEnabled ? <p className="mt-3 text-sm text-[var(--muted)]">{recordStatus?.message ?? "Checking configuration…"}</p> : recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] p-5"><p className="text-sm text-[var(--muted)]">Sign in to view estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : savedRecords.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{recordsSignedIn === true ? "No saved estimates yet." : "Sign in after private storage is configured to access saved estimates."}</p> : <ul className="mt-4 grid gap-3 md:grid-cols-2">{savedRecords.map((record) => <li key={record.id} className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] p-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{record.title}</p><p className="mt-1 text-xs text-[var(--muted)]">Saved {new Date(record.createdAt).toLocaleDateString()} · expires {new Date(record.expiresAt).toLocaleDateString()}</p></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => openPrivateRecord(record.id)} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-medium disabled:opacity-50">{recordAction === record.id ? "Opening…" : "Open"}</button><button type="button" onClick={() => deletePrivateRecord(record.id)} disabled={recordAction !== null} aria-label={`Delete ${record.title}`} className="rounded-full px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">Delete</button></div></li>)}</ul>}
       {recordsMessage && !estimate && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
     </section>

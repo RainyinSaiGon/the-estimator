@@ -23,6 +23,8 @@ def delivery_record(record_id, *, split=None, synthetic=False, calibration=True)
     outcome = {
         "baselineId": "base-1", "baselineSha256": "a" * 64, "evaluationSplit": assigned,
         "reviewStatus": "approved", "synthetic": synthetic, "calibrationEligible": calibration,
+        "submittedBy": "account-owner", "reviewerId": "independent-reviewer",
+        "reviewDecisions": [{"actorId": "independent-reviewer", "decision": "approved", "note": "Checked against source evidence."}],
         "actualHours": {"import": 8, "sync": 4}, "additionalScopeHours": 50,
     }
     return {"id": record_id, "payload": {"baseline": baseline, "deliveryOutcome": outcome, "estimate": {"hours": 10, "baseHours": 12, "low": 8, "high": 16}, "reviewedScope": {"domain": "integration"}}}
@@ -66,6 +68,15 @@ class EvaluationTests(unittest.TestCase):
         record["payload"]["deliveryOutcome"]["reviewStatus"] = "pending"
         result = evaluate_delivery([record])
         self.assertEqual(result["ineligibleRecordsExcluded"], {"delivery_outcome_not_approved": 1})
+
+    def test_self_attested_delivery_is_excluded_even_if_marked_eligible(self):
+        holdout_id = next(f"self-reviewed-{index}" for index in range(100) if expected_split(f"self-reviewed-{index}") == "holdout")
+        record = delivery_record(holdout_id)
+        outcome = record["payload"]["deliveryOutcome"]
+        outcome["reviewerId"] = outcome["submittedBy"]
+        outcome["reviewDecisions"][0]["actorId"] = outcome["submittedBy"]
+        result = evaluate_delivery([record])
+        self.assertEqual(result["ineligibleRecordsExcluded"], {"delivery_outcome_not_independently_reviewed": 1})
 
     def test_missing_or_legacy_outcomes_are_counted_as_excluded(self):
         record = delivery_record("legacy-id")

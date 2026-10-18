@@ -85,8 +85,15 @@ def normalize_record(row: dict[str, Any]) -> dict[str, Any]:
     if outcome.get("evaluationSplit") != "holdout":
         return {"split": split}
     synthetic = outcome.get("synthetic") is True
-    if not synthetic and outcome.get("calibrationEligible") is not True:
-        return {"split": "holdout", "skipReason": "recorded_outcome_not_calibration_eligible"}
+    if not synthetic:
+        decisions = outcome.get("reviewDecisions")
+        last_decision = decisions[-1] if isinstance(decisions, list) and decisions else {}
+        submitted_by = outcome.get("submittedBy")
+        reviewer_id = outcome.get("reviewerId")
+        if not isinstance(submitted_by, str) or not submitted_by or not isinstance(reviewer_id, str) or not reviewer_id or submitted_by == reviewer_id or last_decision.get("actorId") != reviewer_id or last_decision.get("decision") != "approved":
+            return {"split": "holdout", "skipReason": "delivery_outcome_not_independently_reviewed"}
+        if outcome.get("calibrationEligible") is not True:
+            return {"split": "holdout", "skipReason": "recorded_outcome_not_calibration_eligible"}
     scope = payload.get("reviewedScope") or {}
     domain = scope.get("domain", "unknown") if isinstance(scope, dict) else "unknown"
     return {"split": split, "synthetic": synthetic, "domain": domain, "actualHours": actual_total, "estimateHours": estimate_hours, "baseHours": base_hours, "low": low, "high": high}

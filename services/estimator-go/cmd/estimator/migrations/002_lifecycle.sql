@@ -15,5 +15,8 @@ CREATE TABLE IF NOT EXISTS estimator_migration_ledger (
     mapping_reviewed_at TIMESTAMPTZ NOT NULL
 );
 
+ALTER TABLE estimator_migration_ledger
+    ADD COLUMN IF NOT EXISTS imported_record_digest CHAR(64);
+
 CREATE INDEX IF NOT EXISTS estimator_migration_ledger_source_idx
     ON estimator_migration_ledger (source_id);

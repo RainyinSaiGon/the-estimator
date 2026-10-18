@@ -64,13 +64,20 @@ func TestDeliveryOutcomeRequiresExactFrozenWorkPackagesAndSeparateAddedScope(t *
 }
 
 func TestDeliveryCalibrationRequiresHumanApprovalAndVerifiedRecordedEvidence(t *testing.T) {
-	outcome := deliveryOutcome{ReviewStatus: "pending", EvidenceSource: "timesheet", EvidenceReference: "ref-123"}
+	submitterID := "0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce"
+	reviewerID := "5d10f5a7-8e8a-4c07-a75b-353f567aa3be"
+	outcome := deliveryOutcome{SubmittedBy: submitterID, ReviewerID: reviewerID, ReviewStatus: "pending", EvidenceSource: "timesheet", EvidenceReference: "ref-123"}
 	if eligible, _ := deliveryEligibility(outcome); eligible {
 		t.Fatal("pending outcome must not calibrate")
 	}
 	outcome.ReviewStatus = "approved"
+	outcome.ReviewDecisions = []lifecycleReviewDecision{{ActorID: submitterID, Decision: "approved", Note: "self approved"}}
+	if eligible, _ := deliveryEligibility(outcome); eligible {
+		t.Fatal("self-attested approval must not calibrate")
+	}
+	outcome.ReviewDecisions[0].ActorID = reviewerID
 	if eligible, _ := deliveryEligibility(outcome); !eligible {
-		t.Fatal("approved, sourced recorded outcome should calibrate")
+		t.Fatal("an independently approved sourced outcome should calibrate")
 	}
 	outcome.Synthetic = true
 	if eligible, _ := deliveryEligibility(outcome); eligible {

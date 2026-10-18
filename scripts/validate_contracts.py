@@ -220,6 +220,7 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
         ("/v1/records/{recordID}", "patch"): "private-records:update",
         ("/v1/records/{recordID}", "delete"): "private-records:delete",
         ("/v1/records/{recordID}/delivery", "post"): "private-records:update",
+        ("/v1/records/{recordID}/delivery/review", "get"): "private-records:read",
         ("/v1/records/{recordID}/delivery/review", "patch"): "private-records:update",
     }
     paths = spec["paths"]
@@ -267,6 +268,18 @@ def validate_record_contract_compatibility(spec: dict[str, Any]) -> None:
         "reviewDecisions": [{"id": "00000000-0000-4000-8000-000000000002", "kind": "scope-approved", "at": "2026-10-18T12:00:00Z", "actorId": "00000000-0000-4000-8000-000000000003", "decision": "approved"}],
     }
     validate_payload(spec, "PrivateRecordSnapshotPayload", payload_v2, "version 2 reviewed record")
+    delivery = {
+        "baselineId": payload_v2["baseline"]["id"], "baselineSha256": payload_v2["baseline"]["sha256"],
+        "submittedBy": "00000000-0000-4000-8000-000000000003", "reviewerId": "00000000-0000-4000-8000-000000000004",
+        "completedAt": "2026-10-18T12:00:00Z", "actualHours": {"import": 2}, "additionalScopeHours": 0,
+        "synthetic": False, "evidenceSource": "timesheet", "evidenceReference": "timesheet-1",
+        "reviewStatus": "approved", "evaluationSplit": "training", "calibrationEligible": True,
+        "calibrationReason": "Independently reviewed.",
+        "reviewDecisions": [{"id": "00000000-0000-4000-8000-000000000005", "kind": "delivery-review", "at": "2026-10-18T12:00:00Z", "actorId": "00000000-0000-4000-8000-000000000004", "decision": "approved", "note": "Checked against the source evidence."}],
+    }
+    validate_payload(spec, "PrivateDeliveryOutcome", delivery, "independently reviewed delivery outcome")
+    validate_payload(spec, "PrivateDeliveryInput", {"baselineId": payload_v2["baseline"]["id"], "baselineSha256": payload_v2["baseline"]["sha256"], "reviewerId": "00000000-0000-4000-8000-000000000004", "completedAt": "2026-10-18T12:00:00Z", "actualHours": {"import": 2}, "additionalScopeHours": 0, "synthetic": False, "evidenceSource": "timesheet", "evidenceReference": "timesheet-1"}, "delivery request with independent reviewer")
+    validate_payload(spec, "PrivateDeliveryReviewView", {"recordId": "00000000-0000-4000-8000-000000000006", "source": payload_v2["source"], "reviewedScope": {}, "estimate": estimate, "baseline": payload_v2["baseline"], "deliveryOutcome": {**delivery, "reviewStatus": "pending", "calibrationEligible": False, "calibrationReason": "Awaiting independent review.", "reviewDecisions": []}}, "assigned delivery review view")
     create_v2 = {key: value for key, value in payload_v2.items() if key not in ("baseline", "provenance", "reviewDecisions")}
     validate_payload(spec, "PrivateRecordCreate", {"schemaVersion": 2, "reviewConfirmed": True, "payload": create_v2}, "version 2 create input without server-assigned provenance")
     for label, invalid in (("unsupported record version", {**payload_v2, "schemaVersion": 99}), ("legacy record with delivery data", {**payload_v1, "deliveryOutcome": {"hours": 4}})):
@@ -302,6 +315,12 @@ def validate_learning_artifact_schemas() -> None:
     }
     if list(Draft202012Validator(policy_schema).iter_errors(valid_proposal)):
         raise ValueError("learning policy proposal schema rejected its valid approval example")
+    draft_proposal = {key: value for key, value in valid_proposal.items() if key != "review"}
+    draft_proposal["status"] = "draft"
+    if list(Draft202012Validator(policy_schema).iter_errors(draft_proposal)):
+        raise ValueError("learning policy proposal schema rejected an unreviewed draft")
+    if not list(Draft202012Validator(policy_schema).iter_errors({**draft_proposal, "status": "approved"})):
+        raise ValueError("learning policy proposal schema accepted an approved proposal without review")
     invalid_proposal = {**valid_proposal, "review": {**valid_proposal["review"], "decision": "rejected"}}
     if not list(Draft202012Validator(policy_schema).iter_errors(invalid_proposal)):
         raise ValueError("learning policy proposal schema accepted a mismatched approval decision")

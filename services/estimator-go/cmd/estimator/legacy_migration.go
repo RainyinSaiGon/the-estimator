@@ -369,11 +369,12 @@ func importLegacyRecord(ctx context.Context, store *recordStore, row legacyMigra
 	if err != nil {
 		return false, "record_encryption_failed"
 	}
+	importedRecordDigest := encryptedRecordDigest(titleNonce, titleCiphertext, payloadNonce, payloadCiphertext)
 	expiresAt := time.Now().UTC().AddDate(0, 0, store.retentionDays)
 	if _, err := tx.Exec(ctx, `INSERT INTO estimator_records (id, account_id, schema_version, title_nonce, title_ciphertext, content_nonce, content_ciphertext, created_at, expires_at) VALUES ($1, $2, 2, $3, $4, $5, $6, now(), $7)`, recordID, accountID, titleNonce, titleCiphertext, payloadNonce, payloadCiphertext, expiresAt); err != nil {
 		return false, "target_record_insert_failed"
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO estimator_migration_ledger (migration_key, source_id, owner_key, record_id, source_digest, mapping_reviewer, mapping_reviewed_at) VALUES ($1, $2, $3, $4, $5, $6, $7)`, migrationKey, row.RecordID, ownerKey, recordID, digest, mapping.ReviewerID, mapping.ReviewedAt.UTC()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO estimator_migration_ledger (migration_key, source_id, owner_key, record_id, source_digest, mapping_reviewer, mapping_reviewed_at, imported_record_digest) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`, migrationKey, row.RecordID, ownerKey, recordID, digest, mapping.ReviewerID, mapping.ReviewedAt.UTC(), importedRecordDigest); err != nil {
 		return false, "migration_ledger_insert_failed"
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -402,8 +403,8 @@ func rollbackLegacyMigration(ctx context.Context, rows []legacyMigrationRow, map
 			result.Reasons["database_unavailable"]++
 			continue
 		}
-		var recordID string
-		err = tx.QueryRow(ctx, `SELECT record_id::text FROM estimator_migration_ledger WHERE migration_key = $1 FOR UPDATE`, migrationKey).Scan(&recordID)
+		var recordID, sourceDigest, ledgerOwnerKey, importedRecordDigest string
+		err = tx.QueryRow(ctx, `SELECT record_id::text, source_digest, owner_key, COALESCE(imported_record_digest, '') FROM estimator_migration_ledger WHERE migration_key = $1 FOR UPDATE`, migrationKey).Scan(&recordID, &sourceDigest, &ledgerOwnerKey, &importedRecordDigest)
 		if errors.Is(err, pgx.ErrNoRows) {
 			_ = tx.Rollback(ctx)
 			result.Skipped++
@@ -416,7 +417,48 @@ func rollbackLegacyMigration(ctx context.Context, rows []legacyMigrationRow, map
 			result.Reasons["migration_ledger_unavailable"]++
 			continue
 		}
-		if _, err = tx.Exec(ctx, `DELETE FROM estimator_records WHERE id = $1`, recordID); err != nil {
+		if sourceDigest != sha256Hex(row.Project) {
+			_ = tx.Rollback(ctx)
+			result.Rejected++
+			result.Reasons["source_record_changed_since_import"]++
+			continue
+		}
+		mapping := mappings[row.OwnerID]
+		mappingOwnerKey := store.ownerLookupKey(recordPrincipal{issuer: "first-party-v1", subject: mapping.FirstPartyAccountID})
+		if ledgerOwnerKey != mappingOwnerKey {
+			_ = tx.Rollback(ctx)
+			result.Rejected++
+			result.Reasons["owner_mapping_changed_since_import"]++
+			continue
+		}
+		if importedRecordDigest == "" {
+			_ = tx.Rollback(ctx)
+			result.Rejected++
+			result.Reasons["rollback_integrity_baseline_missing"]++
+			continue
+		}
+		var accountID string
+		var titleNonce, titleCiphertext, payloadNonce, payloadCiphertext []byte
+		err = tx.QueryRow(ctx, `SELECT account_id::text, title_nonce, title_ciphertext, content_nonce, content_ciphertext FROM estimator_records WHERE id = $1 FOR UPDATE`, recordID).Scan(&accountID, &titleNonce, &titleCiphertext, &payloadNonce, &payloadCiphertext)
+		if errors.Is(err, pgx.ErrNoRows) {
+			_ = tx.Rollback(ctx)
+			result.Skipped++
+			result.Reasons["imported_record_already_missing"]++
+			continue
+		}
+		if err != nil {
+			_ = tx.Rollback(ctx)
+			result.Rejected++
+			result.Reasons["rollback_record_lookup_failed"]++
+			continue
+		}
+		if encryptedRecordDigest(titleNonce, titleCiphertext, payloadNonce, payloadCiphertext) != importedRecordDigest {
+			_ = tx.Rollback(ctx)
+			result.Rejected++
+			result.Reasons["imported_record_changed_since_import"]++
+			continue
+		}
+		if _, err = tx.Exec(ctx, `DELETE FROM estimator_records WHERE id = $1 AND account_id = $2`, recordID, accountID); err != nil {
 			_ = tx.Rollback(ctx)
 			result.Rejected++
 			result.Reasons["rollback_record_delete_failed"]++
@@ -430,6 +472,11 @@ func rollbackLegacyMigration(ctx context.Context, rows []legacyMigrationRow, map
 		result.RolledBack++
 	}
 	return result
+}
+
+func encryptedRecordDigest(titleNonce, titleCiphertext, payloadNonce, payloadCiphertext []byte) string {
+	encoded, _ := json.Marshal([][]byte{titleNonce, titleCiphertext, payloadNonce, payloadCiphertext})
+	return sha256Hex(encoded)
 }
 
 func deterministicUUID(value string) string {

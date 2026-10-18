@@ -37,11 +37,11 @@
     },
     "rollbackPolicyVersion": { "type": "string", "minLength": 1 }
   },
-  "required": ["schemaVersion", "proposalId", "status", "currentPolicyVersion", "proposedPolicyVersion", "affectedDomain", "cohort", "sampleCount", "evidence", "review", "rollbackPolicyVersion"],
+  "required": ["schemaVersion", "proposalId", "status", "currentPolicyVersion", "proposedPolicyVersion", "affectedDomain", "cohort", "sampleCount", "evidence", "rollbackPolicyVersion"],
   "allOf": [
-    { "if": { "properties": { "status": { "const": "approved" } } }, "then": { "properties": { "review": { "properties": { "decision": { "const": "approved" } } } } } },
-    { "if": { "properties": { "status": { "const": "rejected" } } }, "then": { "properties": { "review": { "properties": { "decision": { "const": "rejected" } } } } } },
-    { "if": { "properties": { "status": { "const": "deferred" } } }, "then": { "properties": { "review": { "properties": { "decision": { "const": "deferred" } } } } } }
+    { "if": { "properties": { "status": { "const": "approved" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "approved" } } } } } },
+    { "if": { "properties": { "status": { "const": "rejected" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "rejected" } } } } } },
+    { "if": { "properties": { "status": { "const": "deferred" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "deferred" } } } } } }
   ],
   "additionalProperties": false
 }

@@ -43,6 +43,8 @@ type lifecycleReviewDecision struct {
 type deliveryOutcome struct {
 	BaselineID          string                    `json:"baselineId"`
 	BaselineSHA256      string                    `json:"baselineSha256"`
+	SubmittedBy         string                    `json:"submittedBy"`
+	ReviewerID          string                    `json:"reviewerId"`
 	CompletedAt         time.Time                 `json:"completedAt"`
 	ActualHours         map[string]float64        `json:"actualHours"`
 	AdditionalHours     float64                   `json:"additionalScopeHours"`
@@ -59,6 +61,7 @@ type deliveryOutcome struct {
 type createDeliveryRequest struct {
 	BaselineID        string             `json:"baselineId"`
 	BaselineSHA256    string             `json:"baselineSha256"`
+	ReviewerID        string             `json:"reviewerId"`
 	CompletedAt       time.Time          `json:"completedAt"`
 	ActualHours       map[string]float64 `json:"actualHours"`
 	AdditionalHours   float64            `json:"additionalScopeHours"`
@@ -271,7 +274,7 @@ func frozenEvaluationSplit(recordID string) string {
 func validDeliveryOutcome(raw, baselineRaw json.RawMessage) bool {
 	var outcome deliveryOutcome
 	var baseline frozenRecordBaseline
-	if json.Unmarshal(raw, &outcome) != nil || json.Unmarshal(baselineRaw, &baseline) != nil || !isUUID(outcome.BaselineID) || outcome.BaselineID != baseline.ID || outcome.BaselineSHA256 != baseline.SHA256 || outcome.CompletedAt.IsZero() || outcome.AdditionalHours < 0 || outcome.AdditionalHours > 1_000_000 || len(outcome.ActualHours) != len(baseline.WorkPackageIDs) || (outcome.ReviewStatus != "pending" && outcome.ReviewStatus != "approved" && outcome.ReviewStatus != "rejected") || outcome.EvaluationSplit != baseline.EvaluationSplit {
+	if json.Unmarshal(raw, &outcome) != nil || json.Unmarshal(baselineRaw, &baseline) != nil || !isUUID(outcome.BaselineID) || outcome.BaselineID != baseline.ID || outcome.BaselineSHA256 != baseline.SHA256 || !isUUID(outcome.SubmittedBy) || !isUUID(outcome.ReviewerID) || outcome.SubmittedBy == outcome.ReviewerID || outcome.CompletedAt.IsZero() || outcome.AdditionalHours < 0 || outcome.AdditionalHours > 1_000_000 || len(outcome.ActualHours) != len(baseline.WorkPackageIDs) || (outcome.ReviewStatus != "pending" && outcome.ReviewStatus != "approved" && outcome.ReviewStatus != "rejected") || outcome.EvaluationSplit != baseline.EvaluationSplit {
 		return false
 	}
 	for _, id := range baseline.WorkPackageIDs {
@@ -295,8 +298,15 @@ func validDeliveryOutcome(raw, baselineRaw json.RawMessage) bool {
 	if outcome.ReviewStatus == "pending" && len(outcome.ReviewDecisions) != 0 {
 		return false
 	}
+	if outcome.ReviewStatus == "pending" && outcome.CalibrationEligible {
+		return false
+	}
 	if outcome.ReviewStatus != "pending" {
 		if len(outcome.ReviewDecisions) == 0 || !isUUID(outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].ID) || !isUUID(outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].ActorID) || outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].Decision != outcome.ReviewStatus || strings.TrimSpace(outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].Note) == "" {
+			return false
+		}
+		eligible, _ := deliveryEligibility(outcome)
+		if outcome.CalibrationEligible != eligible {
 			return false
 		}
 	}
@@ -309,6 +319,49 @@ func (store *recordStore) handleDelivery(w http.ResponseWriter, r *http.Request)
 
 func (store *recordStore) handleDeliveryReview(w http.ResponseWriter, r *http.Request) {
 	store.mutateDelivery(w, r, true)
+}
+
+func (store *recordStore) handleDeliveryReviewView(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if store == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private records are not configured."})
+		return
+	}
+	principal, ok := store.authorize(w, r)
+	if !ok {
+		return
+	}
+	recordID := r.PathValue("recordID")
+	if !isUUID(recordID) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Delivery review not found."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
+	defer cancel()
+	var accountID string
+	var nonce, ciphertext []byte
+	err := store.pool.QueryRow(ctx, `SELECT r.account_id::text, r.content_nonce, r.content_ciphertext FROM estimator_records r WHERE r.id = $1 AND r.expires_at > now()`, recordID).Scan(&accountID, &nonce, &ciphertext)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Delivery review not found."})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Delivery review could not be loaded."})
+		return
+	}
+	plain, err := store.decryptField(accountID, recordID, "payload", nonce, ciphertext)
+	var payload recordPayload
+	var outcome deliveryOutcome
+	var baseline frozenRecordBaseline
+	if err != nil || json.Unmarshal(plain, &payload) != nil || !validRecordPayload(payload) || json.Unmarshal(payload.DeliveryOutcome, &outcome) != nil || json.Unmarshal(payload.Baseline, &baseline) != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Delivery review not found."})
+		return
+	}
+	if outcome.ReviewerID != principal.subject || principal.subject == outcome.SubmittedBy || outcome.ReviewStatus != "pending" {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Delivery review not found."})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"recordId": recordID, "source": payload.Source, "reviewedScope": json.RawMessage(payload.ReviewedScope), "estimate": json.RawMessage(payload.Estimate), "baseline": baseline, "deliveryOutcome": outcome})
 }
 
 func (store *recordStore) mutateDelivery(w http.ResponseWriter, r *http.Request, reviewing bool) {
@@ -351,7 +404,13 @@ func (store *recordStore) mutateDelivery(w http.ResponseWriter, r *http.Request,
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	var accountID string
 	var nonce, ciphertext []byte
-	err = tx.QueryRow(ctx, `SELECT r.account_id::text, r.content_nonce, r.content_ciphertext FROM estimator_records r JOIN estimator_accounts a ON a.id = r.account_id WHERE r.id = $1 AND a.owner_key = $2 AND r.expires_at > now() FOR UPDATE OF r`, recordID, store.ownerLookupKey(principal)).Scan(&accountID, &nonce, &ciphertext)
+	isOwner := false
+	if reviewing {
+		err = tx.QueryRow(ctx, `SELECT r.account_id::text, r.content_nonce, r.content_ciphertext, a.owner_key = $2 FROM estimator_records r JOIN estimator_accounts a ON a.id = r.account_id WHERE r.id = $1 AND r.expires_at > now() FOR UPDATE OF r`, recordID, store.ownerLookupKey(principal)).Scan(&accountID, &nonce, &ciphertext, &isOwner)
+	} else {
+		err = tx.QueryRow(ctx, `SELECT r.account_id::text, r.content_nonce, r.content_ciphertext FROM estimator_records r JOIN estimator_accounts a ON a.id = r.account_id WHERE r.id = $1 AND a.owner_key = $2 AND r.expires_at > now() FOR UPDATE OF r`, recordID, store.ownerLookupKey(principal)).Scan(&accountID, &nonce, &ciphertext)
+		isOwner = err == nil
+	}
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Private estimate not found."})
 		return
@@ -381,11 +440,11 @@ func (store *recordStore) mutateDelivery(w http.ResponseWriter, r *http.Request,
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid delivery outcome."})
 			return
 		}
-		if !validDeliveryInput(input, baseline) {
-			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "Provide complete task actuals and delivery evidence for the frozen baseline."})
+		if !validDeliveryInput(input, baseline) || !isUUID(input.ReviewerID) || input.ReviewerID == principal.subject {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "Provide complete task actuals and designate a different first-party account to review them."})
 			return
 		}
-		outcome := deliveryOutcome{BaselineID: baseline.ID, BaselineSHA256: baseline.SHA256, CompletedAt: input.CompletedAt.UTC(), ActualHours: input.ActualHours, AdditionalHours: input.AdditionalHours, Synthetic: input.Synthetic, EvidenceSource: input.EvidenceSource, EvidenceReference: strings.TrimSpace(input.EvidenceReference), ReviewStatus: "pending", EvaluationSplit: baseline.EvaluationSplit, CalibrationEligible: false, CalibrationReason: "Awaiting human review.", ReviewDecisions: []lifecycleReviewDecision{}}
+		outcome := deliveryOutcome{BaselineID: baseline.ID, BaselineSHA256: baseline.SHA256, SubmittedBy: principal.subject, ReviewerID: input.ReviewerID, CompletedAt: input.CompletedAt.UTC(), ActualHours: input.ActualHours, AdditionalHours: input.AdditionalHours, Synthetic: input.Synthetic, EvidenceSource: input.EvidenceSource, EvidenceReference: strings.TrimSpace(input.EvidenceReference), ReviewStatus: "pending", EvaluationSplit: baseline.EvaluationSplit, CalibrationEligible: false, CalibrationReason: "Awaiting review by the designated independent reviewer.", ReviewDecisions: []lifecycleReviewDecision{}}
 		payload.DeliveryOutcome, _ = json.Marshal(outcome)
 	} else {
 		if bytes.Equal(bytes.TrimSpace(payload.DeliveryOutcome), []byte("null")) {
@@ -402,14 +461,18 @@ func (store *recordStore) mutateDelivery(w http.ResponseWriter, r *http.Request,
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "This delivery outcome has already been reviewed."})
 			return
 		}
+		if outcome.ReviewerID != principal.subject || principal.subject == outcome.SubmittedBy || isOwner {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "Delivery review not found."})
+			return
+		}
 		decisionID, idErr := newUUID()
 		if idErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Delivery review could not be recorded."})
 			return
 		}
 		outcome.ReviewStatus = input.Decision
-		outcome.CalibrationEligible, outcome.CalibrationReason = deliveryEligibility(outcome)
 		outcome.ReviewDecisions = append(outcome.ReviewDecisions, lifecycleReviewDecision{ID: decisionID, Kind: "delivery-review", At: time.Now().UTC(), ActorID: principal.subject, Decision: input.Decision, Note: strings.TrimSpace(input.Note)})
+		outcome.CalibrationEligible, outcome.CalibrationReason = deliveryEligibility(outcome)
 		payload.DeliveryOutcome, _ = json.Marshal(outcome)
 	}
 	payloadBytes, err := json.Marshal(payload)
@@ -474,11 +537,17 @@ func deliveryEligibility(outcome deliveryOutcome) (bool, string) {
 	if outcome.Synthetic {
 		return false, "Synthetic outcomes are kept in a separate cohort."
 	}
-	if outcome.EvidenceSource == "unknown" || strings.TrimSpace(outcome.EvidenceReference) == "" {
+	if (outcome.EvidenceSource != "timesheet" && outcome.EvidenceSource != "client-confirmed" && outcome.EvidenceSource != "manual-reviewed") || strings.TrimSpace(outcome.EvidenceReference) == "" {
 		return false, "Evidence source is missing or unverified."
 	}
 	if outcome.ReviewStatus != "approved" {
 		return false, "Outcome has not been approved by a human reviewer."
 	}
-	return true, "Approved recorded outcome with complete task-level actuals."
+	if !isUUID(outcome.SubmittedBy) || !isUUID(outcome.ReviewerID) || outcome.ReviewerID == outcome.SubmittedBy {
+		return false, "Delivery actuals do not have an independently designated reviewer."
+	}
+	if len(outcome.ReviewDecisions) == 0 || outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].Decision != "approved" || outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].ActorID != outcome.ReviewerID || outcome.ReviewDecisions[len(outcome.ReviewDecisions)-1].ActorID == outcome.SubmittedBy {
+		return false, "Delivery approval was not recorded by the designated independent reviewer."
+	}
+	return true, "Approved by the designated independent reviewer with complete task-level actuals."
 }

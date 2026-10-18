@@ -1260,7 +1260,7 @@
       "post": {
         "operationId": "recordPrivateDelivery",
         "summary": "Record task-level delivery actuals with an explicit review requirement.",
-        "description": "The Go record service authorizes the owner and records an immutable review decision. Added-scope effort is excluded from original-scope calibration.",
+        "description": "The owner submits task-level actuals and designates a different verified first-party account to review them. Added-scope effort is excluded from original-scope calibration.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1368,10 +1368,33 @@
           }
         }
       ],
+      "get": {
+        "operationId": "getAssignedPrivateDeliveryReview",
+        "summary": "Load the delivery evidence assigned to the authenticated independent reviewer.",
+        "responses": {
+          "200": {
+            "description": "The assigned reviewer may inspect the estimate source and recorded actuals.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrivateDeliveryReviewView" } } }
+          },
+          "401": {
+            "description": "A valid first-party session is required.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+          },
+          "404": {
+            "description": "No pending review is assigned to the authenticated account.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+          },
+          "503": {
+            "description": "Private storage is unavailable.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/BFFError" } } }
+          }
+        },
+        "security": [{ "identitySession": [] }]
+      },
       "patch": {
         "operationId": "reviewPrivateDelivery",
-        "summary": "Approve or reject a recorded delivery outcome.",
-        "description": "The Go record service authorizes the owner and records an immutable review decision. Added-scope effort is excluded from original-scope calibration.",
+        "summary": "Approve or reject a recorded delivery outcome as its designated independent reviewer.",
+        "description": "The authenticated account must match the reviewer designated when actuals were submitted and must differ from the submitting account.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1414,7 +1437,7 @@
             }
           },
           "404": {
-            "description": "Record not found for the authenticated owner.",
+            "description": "No pending delivery review is assigned to the authenticated account.",
             "content": {
               "application/json": {
                 "schema": {
@@ -1482,7 +1505,7 @@
       "post": {
         "operationId": "recordEstimatorDelivery",
         "summary": "Record task-level delivery actuals with an explicit review requirement.",
-        "description": "The Go record service authorizes the owner and records an immutable review decision. Added-scope effort is excluded from original-scope calibration.",
+        "description": "The owner submits task-level actuals and designates a different verified first-party account to review them. Added-scope effort is excluded from original-scope calibration.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1591,10 +1614,34 @@
           }
         }
       ],
+      "get": {
+        "operationId": "getAssignedEstimatorDeliveryReview",
+        "summary": "Load delivery evidence assigned to the authenticated independent reviewer.",
+        "responses": {
+          "200": {
+            "description": "The assigned reviewer may inspect the estimate source and recorded actuals.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/PrivateDeliveryReviewView" } } }
+          },
+          "401": {
+            "description": "A valid first-party service token is required.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+          },
+          "404": {
+            "description": "No pending review is assigned to the authenticated account.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+          },
+          "503": {
+            "description": "Private storage is unavailable.",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/GoError" } } }
+          }
+        },
+        "security": [{ "serviceToken": [] }],
+        "x-required-service-scope": "private-records:read"
+      },
       "patch": {
         "operationId": "reviewEstimatorDelivery",
-        "summary": "Approve or reject a recorded delivery outcome.",
-        "description": "The Go record service authorizes the owner and records an immutable review decision. Added-scope effort is excluded from original-scope calibration.",
+        "summary": "Approve or reject a recorded delivery outcome as its designated independent reviewer.",
+        "description": "The authenticated account must match the reviewer designated when actuals were submitted and must differ from the submitting account.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1637,7 +1684,7 @@
             }
           },
           "404": {
-            "description": "Record not found for the authenticated owner.",
+            "description": "No pending delivery review is assigned to the authenticated account.",
             "content": {
               "application/json": {
                 "schema": {
@@ -3453,6 +3500,11 @@
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
           },
+          "reviewerId": {
+            "type": "string",
+            "format": "uuid",
+            "description": "First-party account ID of the independent reviewer. Must differ from the submitting account."
+          },
           "completedAt": {
             "type": "string",
             "format": "date-time"
@@ -3488,6 +3540,7 @@
         "required": [
           "baselineId",
           "baselineSha256",
+          "reviewerId",
           "completedAt",
           "actualHours",
           "additionalScopeHours",
@@ -3529,6 +3582,14 @@
           "baselineSha256": {
             "type": "string",
             "pattern": "^[a-f0-9]{64}$"
+          },
+          "submittedBy": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reviewerId": {
+            "type": "string",
+            "format": "uuid"
           },
           "completedAt": {
             "type": "string",
@@ -3592,6 +3653,8 @@
         "required": [
           "baselineId",
           "baselineSha256",
+          "submittedBy",
+          "reviewerId",
           "completedAt",
           "actualHours",
           "additionalScopeHours",
@@ -3604,6 +3667,33 @@
           "calibrationReason",
           "reviewDecisions"
         ],
+        "additionalProperties": false
+      },
+      "PrivateDeliveryReviewView": {
+        "type": "object",
+        "properties": {
+          "recordId": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "type": { "type": "string" },
+              "characters": { "type": "integer" },
+              "truncated": { "type": "boolean" },
+              "reviewText": { "type": "string" }
+            },
+            "required": ["name", "type", "characters", "truncated", "reviewText"],
+            "additionalProperties": false
+          },
+          "reviewedScope": { "type": "object", "additionalProperties": true },
+          "estimate": { "$ref": "#/components/schemas/Estimate" },
+          "baseline": { "$ref": "#/components/schemas/PrivateRecordBaseline" },
+          "deliveryOutcome": { "$ref": "#/components/schemas/PrivateDeliveryOutcome" }
+        },
+        "required": ["recordId", "source", "reviewedScope", "estimate", "baseline", "deliveryOutcome"],
         "additionalProperties": false
       },
       "PrivateDeliveryOutcomeResponse": {

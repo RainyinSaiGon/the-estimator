@@ -26,6 +26,8 @@ Each eligible completed project contributes one paired observation from its late
 - signed bias: `baseline.hours - originalScopeActual`
 - observed coverage: whether the original actual falls between the stored low/high bounds
 
+The account recording task actuals must designate a different verified first-party account as reviewer. Only that assigned account can inspect the review bundle and approve or reject it. The service records both authenticated account IDs; self-approval remains ineligible even if a client submits a forged `calibrationEligible` flag. The holdout evaluator repeats this actor check before including a recorded outcome.
+
 The report averages errors/bias and counts covered records. It separates cohorts using the outcome's synthetic flag, identifies legacy provenance, excludes incomplete or chronologically invalid records, and excludes added scope. It does not recompute a historical prediction or tune against an outcome being evaluated. Zero records show an empty state; synthetic/small-sample results carry explicit limits.
 
 ## Learned-policy review gate
@@ -33,6 +35,8 @@ The report averages errors/bias and counts covered records. It separates cohorts
 The current estimator has no online learning or dynamic policy loader. Delivery outcomes do not alter later estimates. Integration estimates report `policyVersion: fixed-calibration/v1`; general estimates report `uncalibrated-priors/v1`. An unreviewed proposal therefore cannot reach the estimate path.
 
 Any future learned adjustment or changed agent policy must be submitted as a versioned proposal with affected domain/cohort, eligible sample count, evidence and data provenance, holdout results, current-policy comparison, limitations, and rollback version. A named reviewer must explicitly approve, reject, or defer it in the proposal review record before a policy change can be activated. Approval must be part of the code review for the corresponding change; the deployed code carries the new `policyVersion`. Do not load proposal values directly from a client request or an unreviewed record.
+
+This is deliberately a code-review governance gate. The JSON Schema is a proposal artifact format and the contract check validates draft and decision states; the application has no runtime proposal submission, approval, or dynamic policy-loading workflow. A product-level policy approval interface would be a separate follow-up if policy changes need to be proposed and approved inside the application.
 
 Rollback restores a previously reviewed policy version for future estimates. Each saved estimate retains its original engine and policy versions, reviewed scope, and frozen values. A policy rollback never recalculates or changes historical baselines.
 
