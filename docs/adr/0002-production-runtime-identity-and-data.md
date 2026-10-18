@@ -23,8 +23,8 @@ Railway documents Dockerfile-backed services, private service DNS/networking, an
 
 ### User identity and service authentication
 
-- Use an OIDC-compatible login at the new public web edge. Map the validated issuer and subject (`iss`, `sub`) to an internal account ID; never use email as the ownership key.
-- The OIDC provider is not selected or provisioned by this ADR. Until it is selected, configured, and tested, the new stack is a local preview and production cutover is blocked.
+- Use an OIDC-compatible login at the new public web edge. Map the validated issuer and subject (`iss`, `sub`) to an internal account ID; never use email as the ownership key. Store a keyed HMAC lookup of that pair rather than the raw issuer or subject.
+- The OIDC provider is not selected or provisioned by this ADR. The local implementation accepts generic discovery configuration, but until a provider is selected, configured, and tested, the private-record path stays disabled and production cutover is blocked.
 - The Next.js BFF validates the browser session and issues a short-lived, audience-limited token for Go. Go validates the token and authorizes every record operation against the internal account ID. Do not trust browser-supplied owner IDs or unsigned identity headers.
 - Go authenticates its calls to Python with a distinct service credential and audience. Python accepts only brief-analysis requests and has no authority to read or write project records. Rotate credentials through runtime secret configuration; keep them out of the repository and browser bundle.
 - Before importing workspaces, build an explicit mapping from each legacy Sites owner ID to an internal account ID. Do not silently match owners by email. If an owner cannot be mapped and verified, hold that owner's records out of the new workspace until an account-linking path exists.
@@ -44,14 +44,14 @@ Railway documents Dockerfile-backed services, private service DNS/networking, an
 
 ## Consequences
 
-- The architecture has clear data ownership and service-authentication boundaries before persistence is added.
+- The architecture has clear data ownership, service-authentication, encrypted-content, retention, and deletion boundaries. The local private-record path is opt-in and disabled until its runtime configuration is complete.
 - A new OIDC provider and explicit legacy-owner mapping are required before workspaces can move away from the current Sites identity system.
 - Railway is a technically suitable target for a containerized preview, but it is not provisioned or production-approved by this ADR. Recheck its cost, region, account access, and operational requirements before deployment.
 - The live Site remains the fallback until the P3 cutover checklist in Epic #4 passes. The local Compose stack remains the development environment.
 
 ## Follow-up gates
 
-1. Select and configure an OIDC provider, then demonstrate two-user isolation and legacy account linking.
-2. Implement Go-owned PostgreSQL persistence and repeatable D1 export/import with reconciliation and rollback evidence.
+1. Select and configure an OIDC provider, then demonstrate two-user isolation and legacy account linking. Generic OIDC wiring does not complete this gate.
+2. Validate Go-owned PostgreSQL persistence, encryption, retention, deletion, and repeatable D1 export/import with reconciliation and rollback evidence against an isolated candidate environment.
 3. Deploy to an isolated Railway environment only after reviewing account, region, and cost. Keep all service and database endpoints private except the web entry point.
 4. Keep production AI disabled until provider data-handling settings and explicit user consent are verified.

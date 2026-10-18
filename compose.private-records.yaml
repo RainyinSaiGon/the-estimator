@@ -1,0 +1,41 @@
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: estimator
+      POSTGRES_USER: estimator
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in the ignored local env file}
+    volumes:
+      - estimator-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U estimator -d estimator"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  estimator:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://estimator:${POSTGRES_PASSWORD}@postgres:5432/estimator?sslmode=disable
+      SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:?Set SERVICE_TOKEN_SECRET in the ignored local env file}
+      CLIENT_CONTENT_KEY: ${CLIENT_CONTENT_KEY:?Set CLIENT_CONTENT_KEY in the ignored local env file}
+      IDENTITY_INDEX_KEY: ${IDENTITY_INDEX_KEY:?Set IDENTITY_INDEX_KEY in the ignored local env file}
+      RECORD_RETENTION_DAYS: ${RECORD_RETENTION_DAYS:-90}
+
+  web:
+    depends_on:
+      identity:
+        condition: service_healthy
+    environment:
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:${WEB_PORT:-3000}}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:-}
+      OIDC_ISSUER: ${OIDC_ISSUER:-}
+      OIDC_DISCOVERY_URL: ${OIDC_DISCOVERY_URL:-}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
+      SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:?Set SERVICE_TOKEN_SECRET in the ignored local env file}
+
+volumes:
+  estimator-postgres-data:
