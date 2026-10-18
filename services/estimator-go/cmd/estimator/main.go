@@ -113,6 +113,9 @@ var driverWeights = map[string]float64{"direction": 3, "api": 3, "quality": 2, "
 var baseHours = map[string]float64{"discovery": 5, "authentication": 8, "mapping": 10, "import": 12, "sync": 16, "deduplication": 8, "testing": 12, "handover": 6}
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "migrate-legacy" {
+		os.Exit(runLegacyMigration(os.Args[2:]))
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
 		switch attr.Key {
 		case slog.TimeKey:
@@ -172,6 +175,9 @@ func main() {
 	mux.HandleFunc("GET /v1/records/{recordID}", records.handleRecord)
 	mux.HandleFunc("PATCH /v1/records/{recordID}", records.handleRecord)
 	mux.HandleFunc("DELETE /v1/records/{recordID}", records.handleRecord)
+	mux.HandleFunc("POST /v1/records/{recordID}/delivery", records.handleDelivery)
+	mux.HandleFunc("GET /v1/records/{recordID}/delivery/review", records.handleDeliveryReviewView)
+	mux.HandleFunc("PATCH /v1/records/{recordID}/delivery/review", records.handleDeliveryReview)
 	mux.HandleFunc("POST /v1/estimates", estimateHandler)
 	mux.HandleFunc("POST /v1/estimates/general", generalEstimateHandler)
 	server := &http.Server{
@@ -408,7 +414,7 @@ func estimateGeneral(req GeneralEstimateRequest) (Estimate, error) {
 		},
 		References: []Reference{},
 		Provenance: map[string]any{
-			"engineVersion": "general-planning/1.0", "mode": "general", "dataBasis": "uncalibrated planning priors",
+			"engineVersion": "general-planning/1.0", "policyVersion": "uncalibrated-priors/v1", "mode": "general", "dataBasis": "uncalibrated planning priors",
 			"referenceIds": []string{}, "complexityBands": map[string][]float64{
 				"small": {2, 4, 8}, "moderate": {8, 16, 32}, "complex": {24, 48, 96},
 			},
@@ -615,7 +621,7 @@ func estimate(req EstimateRequest) (Estimate, error) {
 		referenceIDs = append(referenceIDs, id)
 	}
 	sort.Strings(referenceIDs)
-	return Estimate{Tasks: tasks, Low: totalLow, High: totalHigh, Hours: round1(totalHours), BaseHours: round1(totalBase), Blockers: blockers, Assumptions: assumptions, References: references, Provenance: map[string]any{"engineVersion": "integration-effort/2.0", "historyPolicy": req.HistoryPolicy, "similarityThreshold": .45, "priorObservations": 4, "ratioBounds": []float64{.35, 3}, "driverWeights": driverWeights, "referenceIds": referenceIDs}}, nil
+	return Estimate{Tasks: tasks, Low: totalLow, High: totalHigh, Hours: round1(totalHours), BaseHours: round1(totalBase), Blockers: blockers, Assumptions: assumptions, References: references, Provenance: map[string]any{"engineVersion": "integration-effort/2.0", "policyVersion": "fixed-calibration/v1", "historyPolicy": req.HistoryPolicy, "similarityThreshold": .45, "priorObservations": 4, "ratioBounds": []float64{.35, 3}, "driverWeights": driverWeights, "referenceIds": referenceIDs}}, nil
 }
 
 type scoredHistory struct {

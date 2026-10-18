@@ -46,8 +46,9 @@ function activeServiceTokenKey() {
 
 function requiredServiceScope(method: string, path: string) {
   if (method === "GET" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:read";
-  if (method === "PATCH" && path.startsWith("/v1/records/")) return "private-records:update";
+  if (method === "PATCH" && path.startsWith("/v1/records/") && (path.endsWith("/delivery/review") || /^\/v1\/records\/[^/]+$/.test(path))) return "private-records:update";
   if (method === "POST" && path === "/v1/records") return "private-records:create";
+  if (method === "POST" && path.startsWith("/v1/records/") && path.endsWith("/delivery")) return "private-records:update";
   if (method === "DELETE" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:delete";
   return null;
 }
@@ -106,7 +107,8 @@ export async function proxyPrivateRecordRequest(request: Request, servicePath: s
           response = noStore({ error: "Use a JSON private-record request." }, 415);
           return logHttpResponse(request, response, requestId, startedAt);
         }
-        const boundedBody = await readBoundedBody(request, request.method === "PATCH" ? maxRecordUpdateBytes : maxRecordBytes);
+        const deliveryRequest = servicePath.endsWith("/delivery") || servicePath.endsWith("/delivery/review");
+        const boundedBody = await readBoundedBody(request, deliveryRequest ? 64 * 1024 : request.method === "PATCH" ? maxRecordUpdateBytes : maxRecordBytes);
         response = boundedBody instanceof Response
           ? boundedBody
           : await forwardPrivateRecordRequest(request, serviceUrl, servicePath, authorization, requestId, boundedBody);
