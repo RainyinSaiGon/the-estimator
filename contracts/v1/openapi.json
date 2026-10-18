@@ -2268,6 +2268,19 @@
           "observations": {
             "type": "integer"
           },
+          "medianActualToBaseRatio": {
+            "description": "Median eligible reference actual/base ratio for this work package, or null when no comparable ratios are available.",
+            "type": [
+              "number",
+              "null"
+            ]
+          },
+          "historyWeight": {
+            "description": "Shrinkage weight computed as observations/(observations+4).",
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
           "referenceIds": {
             "type": "array",
             "items": {
@@ -2284,6 +2297,8 @@
           "low",
           "high",
           "observations",
+          "medianActualToBaseRatio",
+          "historyWeight",
           "referenceIds"
         ],
         "additionalProperties": false
