@@ -42,22 +42,31 @@ type Estimate = {
   assumptions: string[];
   tasks: { category: string; label: string; base: number; hours: number; low: number; high: number; observations: number }[];
   references: { id: string; name: string; score: number; synthetic?: boolean }[];
-  provenance: { mode?: string; dataBasis?: string; historyPolicy?: string };
+  provenance: { engineVersion?: string; policyVersion?: string; mode?: string; dataBasis?: string; historyPolicy?: string };
 };
 type PrivateRecordSummary = { id: string; title: string; createdAt: string; expiresAt: string };
+type PrivateBaseline = { id: string; createdAt: string; sha256: string; engineVersion: string; policyVersion: string; evaluationSplit: "training" | "holdout" | "unassigned"; workPackageIds: string[] };
+type PrivateDeliveryOutcome = { baselineId: string; baselineSha256: string; completedAt: string; actualHours: Record<string, number>; additionalScopeHours: number; synthetic: boolean; evidenceSource: string; evidenceReference: string; reviewStatus: "pending" | "approved" | "rejected"; evaluationSplit: string; calibrationEligible: boolean; calibrationReason: string; reviewDecisions: { actorId: string; decision: string; note?: string; at: string }[] };
 type PrivateRecordSnapshot = {
-  schemaVersion: 1;
+  schemaVersion: 1 | 2;
   title: string;
   source: Scope["source"];
   originalFile: { name: string; type: string; contentBase64: string } | null;
   suggestedScope: Scope;
   reviewedScope: Scope;
   estimate: Estimate;
-  deliveryOutcome: null;
+  deliveryOutcome: PrivateDeliveryOutcome | null;
+  baseline?: PrivateBaseline;
+  provenance?: { sourceSha256?: string; analysis?: { mode?: string; status?: string }; legacyUnknown?: boolean };
+  legacyImport?: { provenanceStatus?: string; originalProject?: unknown; historicalBaselineIds?: string[] };
 };
 type PrivateRecordStatus = { identityConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
 
 const supportedFiles = ".pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,.eml";
+
+function localDateInputValue(value = new Date()) {
+  return new Date(value.getTime() - value.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+}
 
 function normalizedEvidence(value: string) {
   return value.normalize("NFKC").toLowerCase()
@@ -103,6 +112,15 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [recordsMessage, setRecordsMessage] = useState("");
   const [recordAction, setRecordAction] = useState<string | null>(null);
   const [originalFileDownload, setOriginalFileDownload] = useState<{ name: string; url: string } | null>(null);
+  const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
+  const [activeSnapshot, setActiveSnapshot] = useState<PrivateRecordSnapshot | null>(null);
+  const [actualHours, setActualHours] = useState<Record<string, string>>({});
+  const [additionalScopeHours, setAdditionalScopeHours] = useState("0");
+  const [deliveryDate, setDeliveryDate] = useState(localDateInputValue);
+  const [deliverySynthetic, setDeliverySynthetic] = useState(false);
+  const [deliveryEvidenceSource, setDeliveryEvidenceSource] = useState("manual-reviewed");
+  const [deliveryEvidenceReference, setDeliveryEvidenceReference] = useState("");
+  const [deliveryReviewNote, setDeliveryReviewNote] = useState("");
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
 
   async function signOut() {
@@ -117,6 +135,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setEstimate(null);
     setOriginalFileDownload(null);
     setReviewConfirmed(false);
+    setActiveRecordId(null);
+    setActiveSnapshot(null);
     setError("");
   }
 
@@ -154,6 +174,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   useEffect(() => () => { if (originalFileDownload) URL.revokeObjectURL(originalFileDownload.url); }, [originalFileDownload]);
 
   function updateRequirement(index: number, patch: Partial<Requirement>) {
+    setActiveRecordId(null);
+    setActiveSnapshot(null);
     setScope((current) => current ? {
       ...current,
       requirements: current.requirements.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
@@ -164,6 +186,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   }
 
   function removeRequirement(index: number) {
+    setActiveRecordId(null);
+    setActiveSnapshot(null);
     setScope((current) => current ? {
       ...current,
       requirements: current.requirements.filter((_, itemIndex) => itemIndex !== index),
@@ -180,6 +204,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setEstimate(null);
     setOriginalFileDownload(null);
     setReviewConfirmed(false);
+    setActiveRecordId(null);
+    setActiveSnapshot(null);
     const capabilities = capabilityText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
     try {
       let body: BodyInit;
@@ -212,6 +238,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setBusy("estimate");
     setError("");
     setEstimate(null);
+    setActiveRecordId(null);
+    setActiveSnapshot(null);
     try {
       const response = await fetch("/api/v1/preview/estimate", {
         method: "POST",
@@ -234,7 +262,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setRecordsMessage("");
     try {
       const payload: PrivateRecordSnapshot = {
-        schemaVersion: 1,
+        schemaVersion: 2,
         title: recordTitle.trim(),
         source: scope.source,
         originalFile: file ? { name: file.name, type: file.type || "application/octet-stream", contentBase64: await fileContentBase64(file) } : null,
@@ -246,17 +274,20 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       const response = await fetch("/api/v1/records", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ schemaVersion: 1, reviewConfirmed: true, payload }),
+        body: JSON.stringify({ schemaVersion: 2, reviewConfirmed: true, payload }),
       });
-      const result = await response.json().catch(() => ({})) as { error?: string };
+      const result = await response.json().catch(() => ({})) as { id?: string; error?: string };
       if (response.status === 401) {
         setRecordsSignedIn(false);
         throw new Error("Sign in to save this estimate to your private workspace.");
       }
       if (!response.ok) throw new Error(result.error ?? "The estimate could not be saved.");
+      if (!result.id) throw new Error("The estimate was saved, but its record ID was missing from the response.");
       setRecordsSignedIn(true);
+      setActiveRecordId(result.id);
       setRecordsMessage("Saved to your private workspace.");
       await refreshSavedRecords();
+      await openPrivateRecord(result.id);
     } catch (cause) {
       setRecordsMessage(cause instanceof Error ? cause.message : "The estimate could not be saved.");
     } finally {
@@ -278,6 +309,13 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       setScope({ ...snapshot.reviewedScope, source });
       setEstimate(snapshot.estimate);
       setRecordTitle(snapshot.title);
+      setActiveRecordId(recordId);
+      setActiveSnapshot(snapshot);
+      setActualHours(snapshot.deliveryOutcome?.actualHours ? Object.fromEntries(Object.entries(snapshot.deliveryOutcome.actualHours).map(([id, hours]) => [id, String(hours)])) : Object.fromEntries(snapshot.estimate.tasks.map((task) => [task.category, ""])));
+      setAdditionalScopeHours(String(snapshot.deliveryOutcome?.additionalScopeHours ?? 0));
+      setDeliverySynthetic(snapshot.deliveryOutcome?.synthetic ?? false);
+      setDeliveryEvidenceSource(snapshot.deliveryOutcome?.evidenceSource ?? "manual-reviewed");
+      setDeliveryEvidenceReference(snapshot.deliveryOutcome?.evidenceReference ?? "");
       setReviewConfirmed(true);
       setBrief(source.reviewText);
       setFile(null);
@@ -299,6 +337,59 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     }
   }
 
+  async function recordDeliveryOutcome() {
+    const baseline = activeSnapshot?.baseline;
+    if (!activeRecordId || !baseline || activeSnapshot?.deliveryOutcome || !deliveryDate || Object.values(actualHours).some((value) => value.trim() === "" || !Number.isFinite(Number(value)) || Number(value) < 0) || !Number.isFinite(Number(additionalScopeHours)) || Number(additionalScopeHours) < 0) return;
+    setRecordAction(activeRecordId);
+    setRecordsMessage("");
+    try {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(activeRecordId)}/delivery`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          baselineId: baseline.id,
+          baselineSha256: baseline.sha256,
+          completedAt: (deliveryDate === localDateInputValue() ? new Date() : new Date(`${deliveryDate}T23:59:59`)).toISOString(),
+          actualHours: Object.fromEntries(Object.entries(actualHours).map(([id, value]) => [id, Number(value)])),
+          additionalScopeHours: Number(additionalScopeHours),
+          synthetic: deliverySynthetic,
+          evidenceSource: deliverySynthetic ? "unknown" : deliveryEvidenceSource,
+          evidenceReference: deliveryEvidenceReference,
+        }),
+      });
+      const result = await response.json().catch(() => ({})) as { deliveryOutcome?: PrivateDeliveryOutcome; error?: string };
+      if (!response.ok || !result.deliveryOutcome) throw new Error(result.error ?? "The delivery outcome could not be saved.");
+      const updated = { ...activeSnapshot, deliveryOutcome: result.deliveryOutcome };
+      setActiveSnapshot(updated);
+      setRecordsMessage("Delivery outcome saved. It is excluded from calibration until reviewed.");
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The delivery outcome could not be saved.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
+  async function reviewDeliveryOutcome(decision: "approved" | "rejected") {
+    if (!activeRecordId || !activeSnapshot?.deliveryOutcome || !deliveryReviewNote.trim()) return;
+    setRecordAction(activeRecordId);
+    setRecordsMessage("");
+    try {
+      const response = await fetch(`/api/v1/records/${encodeURIComponent(activeRecordId)}/delivery/review`, {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ decision, note: deliveryReviewNote.trim() }),
+      });
+      const result = await response.json().catch(() => ({})) as { deliveryOutcome?: PrivateDeliveryOutcome; error?: string };
+      if (!response.ok || !result.deliveryOutcome) throw new Error(result.error ?? "The delivery review could not be saved.");
+      setActiveSnapshot({ ...activeSnapshot, deliveryOutcome: result.deliveryOutcome });
+      setRecordsMessage(decision === "approved" ? "Delivery review approved and recorded." : "Delivery review rejected and recorded.");
+    } catch (cause) {
+      setRecordsMessage(cause instanceof Error ? cause.message : "The delivery review could not be saved.");
+    } finally {
+      setRecordAction(null);
+    }
+  }
+
   async function deletePrivateRecord(recordId: string) {
     if (!window.confirm("Delete this saved estimate? This cannot be undone.")) return;
     setRecordAction(recordId);
@@ -307,6 +398,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       if (response.status === 401) setRecordsSignedIn(false);
       if (!response.ok) throw new Error("The saved estimate could not be deleted.");
       setSavedRecords((current) => current.filter((item) => item.id !== recordId));
+      if (activeRecordId === recordId) { setActiveRecordId(null); setActiveSnapshot(null); }
       setRecordsMessage("Saved estimate deleted.");
     } catch (cause) {
       setRecordsMessage(cause instanceof Error ? cause.message : "The saved estimate could not be deleted.");
@@ -442,6 +534,23 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
               {recordStatus?.recordsEnabled ? recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-white p-4"><p className="text-sm text-[var(--muted)]">Sign in to save or open estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : <div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Estimate name<input aria-label="Private estimate name" value={recordTitle} maxLength={200} onChange={(event) => setRecordTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={savePrivateEstimate} disabled={busy !== null || !recordTitle.trim() || !suggestedScope} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">{busy === "save" ? "Saving privately…" : "Save private estimate"}</button></div> : <p className="mt-4 rounded-xl border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--muted)]">{recordStatus?.message ?? "Checking private storage configuration…"} This preview remains ephemeral until first-party identity and encrypted storage are configured.</p>}
               {recordsMessage && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
             </div>
+            {activeSnapshot?.legacyImport && <details className="mt-5 rounded-2xl border border-[var(--line)] p-5"><summary className="cursor-pointer text-sm font-semibold">Imported delivery and baseline archive</summary><p className="mt-2 text-xs leading-5 text-[var(--muted)]">Legacy provenance is unknown. Archived values remain read-only and are excluded from calibration until separately reviewed.</p><pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap text-xs leading-5 text-[var(--muted)]">{JSON.stringify(activeSnapshot.legacyImport.originalProject, null, 2)}</pre></details>}
+            {activeRecordId && activeSnapshot?.baseline && activeSnapshot.baseline.evaluationSplit !== "unassigned" && <div className="mt-5 rounded-2xl border border-[var(--line)] p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3"><div><h4 className="text-sm font-semibold">Delivery evidence</h4><p className="mt-1 max-w-xl text-xs leading-5 text-[var(--muted)]">This outcome is tied to the frozen estimate and work-package IDs. Added-scope time is kept out of original-scope calibration.</p></div><span className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">{activeSnapshot.baseline.evaluationSplit} cohort</span></div>
+              <p className="mt-3 text-xs text-[var(--muted)]">Baseline {activeSnapshot.baseline.id.slice(0, 8)} · {activeSnapshot.baseline.engineVersion} · {activeSnapshot.baseline.policyVersion}</p>
+              {!activeSnapshot.deliveryOutcome ? <div className="mt-4 space-y-4">
+                <div className="grid gap-3 sm:grid-cols-2">{activeSnapshot.estimate.tasks.map((task) => <label key={task.category} className="text-xs font-medium text-[var(--muted)]">{task.label} actual hours<input type="number" min="0" step="0.1" required value={actualHours[task.category] ?? ""} onChange={(event) => setActualHours((current) => ({ ...current, [task.category]: event.target.value }))} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label>)}</div>
+                <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-[var(--muted)]">Added-scope hours<input type="number" min="0" step="0.1" value={additionalScopeHours} onChange={(event) => setAdditionalScopeHours(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><label className="text-xs font-medium text-[var(--muted)]">Delivery completion date<input type="date" max={localDateInputValue()} value={deliveryDate} onChange={(event) => setDeliveryDate(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label></div>
+                <label className="flex items-center gap-2 text-xs text-[var(--muted)]"><input type="checkbox" checked={deliverySynthetic} onChange={(event) => setDeliverySynthetic(event.target.checked)} className="size-4 accent-black" />Synthetic example (always excluded from recorded calibration)</label>
+                {!deliverySynthetic && <div className="grid gap-3 sm:grid-cols-2"><label className="text-xs font-medium text-[var(--muted)]">Evidence source<select value={deliveryEvidenceSource} onChange={(event) => setDeliveryEvidenceSource(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]"><option value="timesheet">Timesheet</option><option value="client-confirmed">Client confirmed</option><option value="manual-reviewed">Manually reviewed record</option><option value="unknown">Unknown</option></select></label><label className="text-xs font-medium text-[var(--muted)]">Evidence reference<input value={deliveryEvidenceReference} maxLength={500} onChange={(event) => setDeliveryEvidenceReference(event.target.value)} placeholder="Private reference, ticket, or note" className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label></div>}
+                <button type="button" onClick={recordDeliveryOutcome} disabled={recordAction !== null || Object.values(actualHours).some((value) => value.trim() === "" || !Number.isFinite(Number(value)) || Number(value) < 0) || !Number.isFinite(Number(additionalScopeHours)) || Number(additionalScopeHours) < 0 || (!deliverySynthetic && deliveryEvidenceSource !== "unknown" && deliveryEvidenceReference.trim().length < 3)} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">Record delivery outcome</button>
+              </div> : <div className="mt-4 space-y-3 rounded-xl bg-[var(--paper)] p-4">
+                <p className="text-sm font-medium">Review status: {activeSnapshot.deliveryOutcome.reviewStatus}</p><p className="text-xs leading-5 text-[var(--muted)]">Original-scope actual: {Object.values(activeSnapshot.deliveryOutcome.actualHours).reduce((sum, value) => sum + value, 0)}h · added scope: {activeSnapshot.deliveryOutcome.additionalScopeHours}h · calibration: {activeSnapshot.deliveryOutcome.calibrationEligible ? "eligible" : activeSnapshot.deliveryOutcome.calibrationReason}</p>
+                {activeSnapshot.deliveryOutcome.reviewStatus === "pending" && <><label className="block text-xs font-medium text-[var(--muted)]">Review note<textarea value={deliveryReviewNote} maxLength={1000} onChange={(event) => setDeliveryReviewNote(event.target.value)} className="mt-1 min-h-20 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" placeholder="Confirm source quality and task reconciliation, or explain rejection." /></label><div className="flex flex-wrap gap-2"><button type="button" onClick={() => void reviewDeliveryOutcome("approved")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white disabled:opacity-50">Approve outcome</button><button type="button" onClick={() => void reviewDeliveryOutcome("rejected")} disabled={recordAction !== null || deliveryReviewNote.trim().length < 3} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] disabled:opacity-50">Reject outcome</button></div></>}
+                {activeSnapshot.deliveryOutcome.reviewDecisions.map((decision, index) => <p key={`${decision.actorId}-${index}`} className="text-xs text-[var(--muted)]">{decision.decision} · {new Date(decision.at).toLocaleString()} · {decision.note}</p>)}
+              </div>}
+            </div>}
+            {activeRecordId && activeSnapshot?.schemaVersion === 1 && <p className="mt-4 text-xs leading-5 text-[var(--muted)]">This legacy snapshot has no recorded baseline provenance. Its estimates remain readable and are not assigned to calibration.</p>}
           </section>}
         </div>}
       </section>
