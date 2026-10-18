@@ -71,6 +71,11 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(recorded["adjustedAbsoluteError"]["mean"], 2)
         self.assertEqual(result["trainingRecordsExcluded"], 1)
 
+    def test_empty_delivery_export_reports_no_eligible_holdout(self):
+        result = evaluate_delivery([])
+        self.assertEqual(result["status"], "no_eligible_holdout")
+        self.assertEqual(result["holdout"], {})
+
     def test_synthetic_delivery_is_separately_reported_and_never_calibrated(self):
         record_id = next(f"synthetic-{index}" for index in range(100) if expected_split(f"synthetic-{index}") == "holdout")
         result = evaluate_delivery([delivery_record(record_id, synthetic=True, calibration=False)])
