@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -15,7 +16,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -35,12 +35,11 @@ const (
 )
 
 type identityStore struct {
-	pool         *pgxpool.Pool
-	bffSecret    []byte
-	sessionTTL   time.Duration
-	dummySalt    []byte
-	dummyHash    []byte
-	loginLimiter *loginLimiter
+	pool       *pgxpool.Pool
+	bffSecret  []byte
+	sessionTTL time.Duration
+	dummySalt  []byte
+	dummyHash  []byte
 }
 
 type account struct {
@@ -64,17 +63,6 @@ type registerRequest struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
-}
-
-type loginLimiter struct {
-	mu      sync.Mutex
-	entries map[string]loginAttempt
-}
-
-type loginAttempt struct {
-	count     int
-	resetAt   time.Time
-	blockedTo time.Time
 }
 
 func openIdentityStore(migrations embed.FS) (*identityStore, error) {
@@ -103,7 +91,7 @@ func openIdentityStore(migrations embed.FS) (*identityStore, error) {
 	if err != nil {
 		return nil, errors.New("identity database pool could not be started")
 	}
-	store := &identityStore{pool: pool, bffSecret: []byte(bffSecret), sessionTTL: sessionTTL, loginLimiter: &loginLimiter{entries: map[string]loginAttempt{}}}
+	store := &identityStore{pool: pool, bffSecret: []byte(bffSecret), sessionTTL: sessionTTL}
 	store.dummySalt = make([]byte, argonSaltBytes)
 	if _, err := rand.Read(store.dummySalt); err != nil {
 		pool.Close()
@@ -193,20 +181,24 @@ func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "The email or password is incorrect."})
 		return
 	}
-	if allowed, retryAfter := store.loginLimiter.allow(email, time.Now()); !allowed {
-		w.Header().Set("retry-after", strconv.Itoa(int(retryAfter.Seconds())))
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	retryAfterSeconds, err := store.consumeLoginAttempt(ctx, email)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+	if retryAfterSeconds > 0 {
+		w.Header().Set("retry-after", strconv.Itoa(retryAfterSeconds))
 		writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Too many sign-in attempts. Try again later."})
 		return
 	}
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
 	var result account
 	var salt, storedHash []byte
 	err = store.pool.QueryRow(ctx, `SELECT id::text, email_normalized, display_name, password_salt, password_hash FROM identity_accounts WHERE email_normalized = $1`, email).Scan(&result.ID, &result.Email, &result.DisplayName, &salt, &storedHash)
 	if errors.Is(err, pgx.ErrNoRows) {
 		dummy := argon2.IDKey([]byte(input.Password), store.dummySalt, argonIterations, argonMemoryKiB, argonParallelism, argonKeyBytes)
 		_ = subtle.ConstantTimeCompare(dummy, store.dummyHash)
-		store.loginLimiter.failed(email, time.Now())
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "The email or password is incorrect."})
 		return
 	}
@@ -216,11 +208,13 @@ func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request
 	}
 	computed := argon2.IDKey([]byte(input.Password), salt, argonIterations, argonMemoryKiB, argonParallelism, uint32(len(storedHash)))
 	if subtle.ConstantTimeCompare(computed, storedHash) != 1 {
-		store.loginLimiter.failed(email, time.Now())
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "The email or password is incorrect."})
 		return
 	}
-	store.loginLimiter.succeeded(email)
+	if err := store.clearLoginAttempts(ctx, email); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
 	response, err := store.createSessionForAccount(ctx, store.pool, result)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "A sign-in session could not be created."})
@@ -336,35 +330,47 @@ func isUniqueViolation(err error) bool {
 	return errors.As(err, &state) && state.SQLState() == "23505"
 }
 
-func (limiter *loginLimiter) allow(email string, now time.Time) (bool, time.Duration) {
-	limiter.mu.Lock()
-	defer limiter.mu.Unlock()
-	entry, ok := limiter.entries[email]
-	if !ok || now.After(entry.resetAt) {
-		return true, 0
+func (store *identityStore) consumeLoginAttempt(ctx context.Context, email string) (int, error) {
+	var retryAfterSeconds int
+	err := store.pool.QueryRow(ctx, `
+		INSERT INTO identity_login_attempts (email_key_hash, window_started_at, attempt_count, updated_at)
+		VALUES ($1, now(), 1, now())
+		ON CONFLICT (email_key_hash) DO UPDATE SET
+			window_started_at = CASE
+				WHEN identity_login_attempts.window_started_at <= now() - interval '10 minutes' THEN now()
+				ELSE identity_login_attempts.window_started_at
+			END,
+			attempt_count = CASE
+				WHEN identity_login_attempts.blocked_until > now() THEN identity_login_attempts.attempt_count
+				WHEN identity_login_attempts.window_started_at <= now() - interval '10 minutes' THEN 1
+				ELSE identity_login_attempts.attempt_count + 1
+			END,
+			blocked_until = CASE
+				WHEN identity_login_attempts.blocked_until > now() THEN identity_login_attempts.blocked_until
+				WHEN identity_login_attempts.window_started_at <= now() - interval '10 minutes' THEN NULL
+				WHEN identity_login_attempts.attempt_count + 1 > 5 THEN now() + interval '10 minutes'
+				ELSE NULL
+			END,
+			updated_at = now()
+		RETURNING GREATEST(0, CEIL(EXTRACT(EPOCH FROM blocked_until - now())))::integer`, store.loginAttemptKey(email)).Scan(&retryAfterSeconds)
+	if err != nil {
+		return 0, err
 	}
-	if now.Before(entry.blockedTo) {
-		return false, time.Until(entry.blockedTo)
-	}
-	return true, 0
+	return retryAfterSeconds, nil
 }
 
-func (limiter *loginLimiter) failed(email string, now time.Time) {
-	limiter.mu.Lock()
-	defer limiter.mu.Unlock()
-	entry := limiter.entries[email]
-	if entry.resetAt.IsZero() || now.After(entry.resetAt) {
-		entry = loginAttempt{resetAt: now.Add(10 * time.Minute)}
-	}
-	entry.count++
-	if entry.count >= 5 {
-		entry.blockedTo = now.Add(10 * time.Minute)
-	}
-	limiter.entries[email] = entry
+func (store *identityStore) clearLoginAttempts(ctx context.Context, email string) error {
+	_, err := store.pool.Exec(ctx, `DELETE FROM identity_login_attempts WHERE email_key_hash = $1`, store.loginAttemptKey(email))
+	return err
 }
 
-func (limiter *loginLimiter) succeeded(email string) {
-	limiter.mu.Lock()
-	delete(limiter.entries, email)
-	limiter.mu.Unlock()
+func (store *identityStore) loginAttemptKey(email string) []byte {
+	mac := hmac.New(sha256.New, store.bffSecret)
+	_, _ = mac.Write([]byte("the-estimator:identity-login-rate:v1\x00" + email))
+	return mac.Sum(nil)
+}
+
+func (store *identityStore) pruneLoginAttempts(ctx context.Context) error {
+	_, err := store.pool.Exec(ctx, `DELETE FROM identity_login_attempts WHERE updated_at < now() - interval '24 hours'`)
+	return err
 }

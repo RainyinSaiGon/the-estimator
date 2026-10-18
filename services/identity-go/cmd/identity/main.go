@@ -86,6 +86,22 @@ func main() {
 		defer cancel()
 		_ = server.Shutdown(ctx)
 	}()
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-shutdownContext.Done():
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(shutdownContext, 3*time.Second)
+				if err := store.pruneLoginAttempts(ctx); err != nil {
+					slog.Warn("identity_login_attempt_cleanup_failed", "service", "identity-go", "reason", err.Error())
+				}
+				cancel()
+			}
+		}
+	}()
 	slog.Info("service_starting", "service", "identity-go", "address", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		slog.Error("service_stopped", "service", "identity-go", "reason", err.Error())

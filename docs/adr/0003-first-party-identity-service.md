@@ -17,6 +17,7 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 - The BFF and trusted Go services resolve a valid browser session to the stable internal account ID through the authenticated identity API. Each service must authorize every owner-scoped operation against that ID. Python receives no identity database access or private-record authority.
 - Start with account-owner authorization only. Do not add organization roles or delegated access until a product workflow requires them.
 - Keep account recovery and email verification unavailable in the local prototype until an email-delivery path is designed. This limitation blocks production use; the local service must say so clearly.
+- Persist sign-in throttling in the identity database using a keyed pseudonymous account identifier so limits are shared across replicas without storing raw email in the throttle table. This control does not replace edge/IP limits or registration abuse controls.
 - Remove the external OIDC provider configuration and callback code only after the first-party sign-in and two-account record-isolation checks pass. Preserve existing records and account ownership through an explicit migration; never auto-link by email.
 - Keep the public Site and its existing authentication path unchanged. This ADR does not authorize a production deployment, data migration, or traffic cutover.
 

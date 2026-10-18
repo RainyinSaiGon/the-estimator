@@ -18,3 +18,13 @@ CREATE TABLE IF NOT EXISTS identity_sessions (
 
 CREATE INDEX IF NOT EXISTS identity_sessions_account_idx ON identity_sessions(account_id);
 CREATE INDEX IF NOT EXISTS identity_sessions_expiry_idx ON identity_sessions(expires_at);
+
+CREATE TABLE IF NOT EXISTS identity_login_attempts (
+    email_key_hash BYTEA PRIMARY KEY CHECK (octet_length(email_key_hash) = 32),
+    window_started_at TIMESTAMPTZ NOT NULL,
+    attempt_count INTEGER NOT NULL CHECK (attempt_count >= 1),
+    blocked_until TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS identity_login_attempts_updated_idx ON identity_login_attempts(updated_at);
