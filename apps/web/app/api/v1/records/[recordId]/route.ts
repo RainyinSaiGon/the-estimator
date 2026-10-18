@@ -14,6 +14,10 @@ export async function GET(request: Request, context: RouteContext) {
   return proxyPrivateRecordRequest(request, await servicePath(context));
 }
 
+export async function PATCH(request: Request, context: RouteContext) {
+  return proxyPrivateRecordRequest(request, await servicePath(context));
+}
+
 export async function DELETE(request: Request, context: RouteContext) {
   return proxyPrivateRecordRequest(request, await servicePath(context));
 }

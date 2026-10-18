@@ -777,6 +777,34 @@
           }
         ]
       },
+      "patch": {
+        "operationId": "renamePrivateRecord",
+        "summary": "Rename a saved estimate without changing its reviewed estimate",
+        "description": "Only the encrypted title changes. The original brief, reviewed scope, estimate, and evidence remain frozen. Owner authorization is checked by the Go record service.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The owner’s record title was updated.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+              }
+            }
+          },
+          "401": { "description": "A valid first-party identity session is required." },
+          "404": { "description": "The record is absent or belongs to another user." },
+          "413": { "description": "The title request exceeds the size limit." },
+          "503": { "description": "Private storage is unavailable." }
+        },
+        "security": [{ "identitySession": [] }]
+      },
       "delete": {
         "operationId": "deletePrivateRecord",
         "summary": "Delete one of the caller’s saved estimates",
@@ -822,81 +850,6 @@
         ]
       }
     },
-    "/api/v1/records/migrate-owner": {
-      "servers": [
-        {
-          "url": "http://127.0.0.1:3000",
-          "description": "Next.js BFF on the default local address"
-        }
-      ],
-      "post": {
-        "operationId": "migrateLegacyPrivateWorkspace",
-        "summary": "Move a previous provider-owned workspace to the first-party account",
-        "description": "Requires active first-party and previous-provider sessions. It never matches by email. Ownership changes and any required record re-encryption are atomic.",
-        "responses": {
-          "200": {
-            "description": "The migration completed or no previous workspace was found.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OwnerMigrationResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Both identity sessions are required.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The same-origin request check failed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "A previous encrypted record could not be authenticated; no ownership changes were committed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Identity or record storage is unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "identitySession": [],
-            "nextAuthSession": []
-          },
-          {
-            "identitySession": [],
-            "secureNextAuthSession": []
-          }
-        ]
-      }
-    },
     "/v1/records/status": {
       "servers": [
         {
@@ -932,6 +885,7 @@
       "get": {
         "operationId": "listEstimatorPrivateRecords",
         "summary": "List records for the token owner",
+        "x-required-service-scope": "private-records:read",
         "responses": {
           "200": {
             "description": "Owner-scoped record metadata.",
@@ -973,6 +927,7 @@
       "post": {
         "operationId": "createEstimatorPrivateRecord",
         "summary": "Persist an encrypted estimate snapshot",
+        "x-required-service-scope": "private-records:create",
         "requestBody": {
           "required": true,
           "content": {
@@ -1035,6 +990,7 @@
       "delete": {
         "operationId": "deleteEstimatorPrivateWorkspace",
         "summary": "Delete the token owner’s private workspace",
+        "x-required-service-scope": "private-records:delete",
         "responses": {
           "204": {
             "description": "The owner’s records and account mapping were deleted."
@@ -1088,6 +1044,7 @@
       "get": {
         "operationId": "getEstimatorPrivateRecord",
         "summary": "Read an owner-scoped encrypted snapshot",
+        "x-required-service-scope": "private-records:read",
         "responses": {
           "200": {
             "description": "The owner’s decrypted snapshot.",
@@ -1136,9 +1093,42 @@
           }
         ]
       },
+      "patch": {
+        "operationId": "updateEstimatorPrivateRecordTitle",
+        "summary": "Update the owner-scoped record title",
+        "description": "Changes only the encrypted title. The frozen brief, reviewed scope, estimate, and evidence remain unchanged.",
+        "x-required-service-scope": "private-records:update",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+            }
+          },
+          "description": "Title update body limit: 8,192 bytes."
+        },
+        "responses": {
+          "200": {
+            "description": "The encrypted record title was updated.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+              }
+            }
+          },
+          "400": { "description": "The title request is invalid." },
+          "401": { "description": "A valid BFF service token with update scope is required." },
+          "404": { "description": "Record not found for token owner." },
+          "409": { "description": "The existing encrypted snapshot could not be safely updated." },
+          "413": { "description": "The request exceeds the body limit." },
+          "503": { "description": "Storage is unavailable." }
+        },
+        "security": [{ "serviceToken": [] }]
+      },
       "delete": {
         "operationId": "deleteEstimatorPrivateRecord",
         "summary": "Delete one owner-scoped snapshot",
+        "x-required-service-scope": "private-records:delete",
         "responses": {
           "204": {
             "description": "The owner’s record was deleted."
@@ -2376,9 +2366,6 @@
           "identityConfigured": {
             "type": "boolean"
           },
-          "legacyMigrationAvailable": {
-            "type": "boolean"
-          },
           "recordsEnabled": {
             "type": "boolean"
           },
@@ -2393,30 +2380,8 @@
         },
         "required": [
           "identityConfigured",
-          "legacyMigrationAvailable",
           "recordsEnabled",
           "retentionDays",
-          "message"
-        ],
-        "additionalProperties": false
-      },
-      "OwnerMigrationResult": {
-        "type": "object",
-        "properties": {
-          "migrated": {
-            "type": "boolean"
-          },
-          "recordCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "migrated",
-          "recordCount",
           "message"
         ],
         "additionalProperties": false
@@ -2585,6 +2550,23 @@
         ],
         "additionalProperties": false
       },
+      "PrivateRecordUpdate": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+      },
+      "PrivateRecordUpdated": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["id", "title"],
+        "additionalProperties": false
+      },
       "PrivateRecordCreated": {
         "type": "object",
         "properties": {
@@ -2688,23 +2670,11 @@
         "name": "estimator_session",
         "description": "HttpOnly first-party session cookie; Secure is set for HTTPS requests."
       },
-      "nextAuthSession": {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": "next-auth.session-token",
-        "description": "Temporary legacy OIDC session cookie used only for explicit workspace migration."
-      },
       "serviceToken": {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Short-lived BFF-to-Go service token. Never issued to browser code."
-      },
-      "secureNextAuthSession": {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": "__Secure-next-auth.session-token",
-        "description": "HTTPS temporary legacy OIDC session cookie used only for explicit workspace migration."
+        "description": "Short-lived BFF-to-Go HS256 token. The protected header includes a key ID for rotation; the token carries one operation-specific private-records scope and is never issued to browser code."
       }
     }
   }

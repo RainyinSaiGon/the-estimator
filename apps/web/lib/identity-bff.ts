@@ -87,6 +87,61 @@ export async function readIdentitySession() {
   return json(session);
 }
 
+export async function renewIdentitySession(request: Request) {
+  if (!sameOriginRequest(request)) return json({ error: "This request must come from The Estimator." }, 403);
+  const token = (await cookies()).get(identityCookieName)?.value;
+  if (!token || !sessionTokenPattern.test(token)) {
+    return new Response(null, { status: 303, headers: { "cache-control": "no-store", location: "/sign-in?returnTo=%2Faccount" } });
+  }
+
+  const response = await identityRequest("/v1/session/renew", {
+    method: "POST",
+    headers: { authorization: "Bearer " + token },
+  });
+  if (!response) return json({ error: "The identity service is temporarily unavailable." }, 503);
+  if (response.status === 401) {
+    const secure = secureCookieForRequest(request);
+    const clearCookie = identityCookieName + "=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0" + (secure ? "; Secure" : "");
+    return new Response(null, {
+      status: 303,
+      headers: {
+        "cache-control": "no-store",
+        location: "/sign-in?returnTo=%2Faccount",
+        "set-cookie": clearCookie,
+      },
+    });
+  }
+  if (!response.ok) return requestFailure(response.status);
+
+  try {
+    const payload = await response.json() as {
+      account?: { accountId?: unknown; email?: unknown; displayName?: unknown };
+      sessionToken?: unknown;
+      expiresAt?: unknown;
+    };
+    const account = payload.account;
+    if (
+      !account ||
+      typeof account.accountId !== "string" ||
+      typeof account.email !== "string" ||
+      typeof account.displayName !== "string" ||
+      typeof payload.sessionToken !== "string" ||
+      !sessionTokenPattern.test(payload.sessionToken) ||
+      typeof payload.expiresAt !== "string" ||
+      !Number.isFinite(Date.parse(payload.expiresAt))
+    ) return json({ error: "The identity service returned an invalid response." }, 502);
+
+    const cookie = sessionCookie(payload.sessionToken, payload.expiresAt, request);
+    if (!cookie) return json({ error: "The renewed session could not be saved." }, 502);
+    return new Response(null, {
+      status: 303,
+      headers: { "cache-control": "no-store", location: "/account", "set-cookie": cookie },
+    });
+  } catch {
+    return json({ error: "The identity service returned an invalid response." }, 502);
+  }
+}
+
 export async function revokeIdentitySession(request: Request) {
   if (!sameOriginRequest(request)) return json({ error: "This request must come from The Estimator." }, 403);
   const token = (await cookies()).get(identityCookieName)?.value;

@@ -59,6 +59,7 @@ func main() {
 	mux.Handle("POST /v1/accounts", store.withBFFAuth(http.HandlerFunc(store.registerAccount)))
 	mux.Handle("POST /v1/sessions", store.withBFFAuth(http.HandlerFunc(store.createSession)))
 	mux.Handle("GET /v1/session", store.withBFFAuth(http.HandlerFunc(store.currentSession)))
+	mux.Handle("POST /v1/session/renew", store.withBFFAuth(http.HandlerFunc(store.renewSession)))
 	mux.Handle("DELETE /v1/session", store.withBFFAuth(http.HandlerFunc(store.revokeSession)))
 
 	host := strings.TrimSpace(os.Getenv("HOST"))
@@ -85,6 +86,22 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 		_ = server.Shutdown(ctx)
+	}()
+	go func() {
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-shutdownContext.Done():
+				return
+			case <-ticker.C:
+				ctx, cancel := context.WithTimeout(shutdownContext, 3*time.Second)
+				if err := store.pruneLoginAttempts(ctx); err != nil {
+					slog.Warn("identity_login_attempt_cleanup_failed", "service", "identity-go", "reason", err.Error())
+				}
+				cancel()
+			}
+		}
 	}()
 	slog.Info("service_starting", "service", "identity-go", "address", server.Addr)
 	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

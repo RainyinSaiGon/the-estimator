@@ -20,6 +20,7 @@ from openapi_spec_validator import validate_spec
 
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "contracts" / "v1" / "openapi.json"
+IDENTITY_SPEC_PATH = ROOT / "contracts" / "v1" / "identity-openapi.json"
 ROUTE_CHECK_PATH = ROOT / "scripts" / "check_bff_route.mjs"
 WEB_HEALTH_CHECK_PATH = ROOT / "scripts" / "check_web_health.mjs"
 BRIEF_DIR = ROOT / "services" / "brief-intelligence"
@@ -179,6 +180,22 @@ def check_structured_logs(process: subprocess.Popen[str], service: str) -> None:
         raise RuntimeError(f"{service} included the submitted brief in its logs.")
     if not any(record.get("event") == "http_request" for record in records):
         raise RuntimeError(f"{service} emitted no structured HTTP request log.")
+
+
+def validate_service_token_scopes(spec: dict[str, Any]) -> None:
+    expected = {
+        ("/v1/records", "get"): "private-records:read",
+        ("/v1/records", "post"): "private-records:create",
+        ("/v1/records", "delete"): "private-records:delete",
+        ("/v1/records/{recordID}", "get"): "private-records:read",
+        ("/v1/records/{recordID}", "patch"): "private-records:update",
+        ("/v1/records/{recordID}", "delete"): "private-records:delete",
+    }
+    paths = spec["paths"]
+    for (path, method), scope in expected.items():
+        operation = paths.get(path, {}).get(method)
+        if not isinstance(operation, dict) or operation.get("x-required-service-scope") != scope:
+            raise ValueError(f"{method.upper()} {path} must declare service scope {scope!r}.")
 
 
 def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:
@@ -499,15 +516,21 @@ def main() -> int:
     try:
         with SPEC_PATH.open(encoding="utf-8") as contract_file:
             spec = json.load(contract_file)
+        with IDENTITY_SPEC_PATH.open(encoding="utf-8") as contract_file:
+            identity_spec = json.load(contract_file)
         validate_spec(spec)
+        validate_spec(identity_spec)
+        validate_service_token_scopes(spec)
         for component in spec["components"]["schemas"]:
             schema_for(spec, component)
+        for component in identity_spec["components"]["schemas"]:
+            schema_for(identity_spec, component)
         check_live_payloads(spec)
     except Exception as error:  # print a single actionable failure to keep this a small local check
         print(f"Contract check failed: {error}", file=sys.stderr)
         return 1
 
-    print("OpenAPI 3.1 contract is valid.")
+    print("Application and first-party identity OpenAPI 3.1 contracts are valid, including the private-record service-scope mapping.")
     print("Live web, Python and Go health payloads, structured service logs and actual BFF success/error/timeout responses match their contracts.")
     return 0
 

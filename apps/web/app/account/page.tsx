@@ -21,8 +21,12 @@ export default async function AccountPage() {
         <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Email</dt><dd className="text-sm">{session.account.email}</dd></div>
         <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Session ends</dt><dd className="text-sm">{new Date(session.expiresAt).toLocaleString()}</dd></div>
       </dl>
-      <p className="mt-6 rounded-xl bg-[var(--paper)] p-4 text-xs leading-5 text-[var(--muted)]">This local account currently proves sign-in and session ownership. Estimates remain in the unsaved preview until the private-records migration is connected.</p>
-      <form action="/api/auth/logout" method="post" className="mt-6"><button className="rounded-full border border-[var(--line)] px-5 py-3 text-sm transition hover:bg-[var(--paper)]">Sign out</button></form>
+      <p className="mt-6 rounded-xl bg-[var(--paper)] p-4 text-xs leading-5 text-[var(--muted)]">This account controls the first-party session used to access your private estimates. Signing out revokes this browser session.</p>
+      <div className="mt-6 flex flex-wrap gap-3">
+        <form action="/api/auth/renew" method="post"><button className="rounded-full bg-[var(--ink)] px-5 py-3 text-sm text-white transition hover:opacity-90">Renew session</button></form>
+        <form action="/api/auth/logout" method="post"><button className="rounded-full border border-[var(--line)] px-5 py-3 text-sm transition hover:bg-[var(--paper)]">Sign out</button></form>
+      </div>
+      <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Renewing rotates the session token. Each sign-in has a 30-day maximum lifetime.</p>
     </section>
   </main>;
 }

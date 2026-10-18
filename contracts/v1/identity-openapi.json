@@ -3,7 +3,7 @@
   "info": {
     "title": "The Estimator first-party identity API",
     "version": "1.0.0",
-    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records."
+    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Email verification and password recovery are intentionally unavailable in the local preview; an account with a lost password cannot self-recover."
   },
   "servers": [
     {
@@ -129,6 +129,27 @@
         "security": [{ "serviceSecret": [], "sessionBearer": [] }],
         "responses": {
           "204": { "description": "The session was revoked or was already absent." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
+    },
+    "/v1/session/renew": {
+      "post": {
+        "operationId": "renewSession",
+        "summary": "Rotate the current session token",
+        "description": "Revokes the current token and creates a replacement with a renewed idle expiry, bounded by the original 30-day absolute session-family expiry.",
+        "security": [{ "serviceSecret": [], "sessionBearer": [] }],
+        "responses": {
+          "200": {
+            "description": "The session was rotated. The new token must remain server-side and be placed only in the protected browser cookie by the BFF.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionCreated" }
+              }
+            }
+          },
+          "401": { "description": "The session is missing, expired, or revoked." },
+          "500": { "description": "A replacement session token could not be generated." },
           "503": { "description": "Identity storage is temporarily unavailable." }
         }
       }
