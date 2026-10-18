@@ -297,6 +297,66 @@ func TestIdentityLifecycleIntegration(t *testing.T) {
 	if loginResponse.Code != http.StatusCreated || !strings.Contains(loginResponse.Body.String(), `"emailVerified":true`) {
 		t.Fatalf("sign in with reset password response = %d %s", loginResponse.Code, loginResponse.Body.String())
 	}
+	var signedIn authResponse
+	if err := json.Unmarshal(loginResponse.Body.Bytes(), &signedIn); err != nil {
+		t.Fatalf("decode sign-in session: %v", err)
+	}
+	renewedResponse := callIdentityHandler(store.renewSession, http.MethodPost, "/v1/session/renew", "", signedIn.SessionToken, "")
+	if renewedResponse.Code != http.StatusOK {
+		t.Fatalf("session renewal status = %d, want 200: %s", renewedResponse.Code, renewedResponse.Body.String())
+	}
+	var renewed authResponse
+	if err := json.Unmarshal(renewedResponse.Body.Bytes(), &renewed); err != nil {
+		t.Fatalf("decode renewed session: %v", err)
+	}
+	if renewed.SessionToken == "" || renewed.SessionToken == signedIn.SessionToken {
+		t.Fatal("session renewal must rotate the opaque session token")
+	}
+	preRenewalSession := callIdentityHandler(store.currentSession, http.MethodGet, "/v1/session", "", signedIn.SessionToken, "")
+	if preRenewalSession.Code != http.StatusUnauthorized {
+		t.Fatalf("rotated session status = %d, want 401", preRenewalSession.Code)
+	}
+	activeRenewedSession := callIdentityHandler(store.currentSession, http.MethodGet, "/v1/session", "", renewed.SessionToken, "")
+	if activeRenewedSession.Code != http.StatusOK {
+		t.Fatalf("renewed session status = %d, want 200", activeRenewedSession.Code)
+	}
+	signOutResponse := callIdentityHandler(store.revokeSession, http.MethodDelete, "/v1/session", "", renewed.SessionToken, "")
+	if signOutResponse.Code != http.StatusNoContent {
+		t.Fatalf("sign-out status = %d, want 204", signOutResponse.Code)
+	}
+	for _, handler := range []struct {
+		name    string
+		handler http.HandlerFunc
+		method  string
+		path    string
+	}{{"current session after sign-out", store.currentSession, http.MethodGet, "/v1/session"}, {"renewal after sign-out", store.renewSession, http.MethodPost, "/v1/session/renew"}} {
+		response := callIdentityHandler(handler.handler, handler.method, handler.path, "", renewed.SessionToken, "")
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s status = %d, want 401", handler.name, response.Code)
+		}
+	}
+	expiryLogin := callIdentityHandler(store.createSession, http.MethodPost, "/v1/sessions", `{"email":"`+verifiedEmail+`","password":"ReplacementPassword456!"}`, "", "")
+	if expiryLogin.Code != http.StatusCreated {
+		t.Fatalf("sign in for expiry check status = %d, want 201", expiryLogin.Code)
+	}
+	var expirySession authResponse
+	if err := json.Unmarshal(expiryLogin.Body.Bytes(), &expirySession); err != nil {
+		t.Fatalf("decode expiry-test session: %v", err)
+	}
+	if _, err := store.pool.Exec(context.Background(), `UPDATE identity_sessions SET expires_at = now() - interval '1 second' WHERE token_hash = $1`, hashSession(expirySession.SessionToken)); err != nil {
+		t.Fatalf("expire test session: %v", err)
+	}
+	for _, handler := range []struct {
+		name    string
+		handler http.HandlerFunc
+		method  string
+		path    string
+	}{{"current expired session", store.currentSession, http.MethodGet, "/v1/session"}, {"renew expired session", store.renewSession, http.MethodPost, "/v1/session/renew"}} {
+		response := callIdentityHandler(handler.handler, handler.method, handler.path, "", expirySession.SessionToken, "")
+		if response.Code != http.StatusUnauthorized {
+			t.Errorf("%s status = %d, want 401", handler.name, response.Code)
+		}
+	}
 
 	unknownEmail := testEmail(t)
 	for attempt := 1; attempt <= 4; attempt++ {

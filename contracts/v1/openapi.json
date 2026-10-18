@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.5.0",
-    "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Local preview persistence is opt-in; private records use first-party account sessions and require identity, service authentication, PostgreSQL, and encryption configuration."
+    "version": "1.6.0",
+    "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Internal Python analysis requires a short-lived BFF service token. Local preview persistence is opt-in; private records use first-party account sessions and require identity, service authentication, PostgreSQL, and encryption configuration."
   },
   "paths": {
     "/health/live": {
@@ -57,7 +57,7 @@
       "get": {
         "operationId": "checkServiceReadiness",
         "summary": "Check whether a service can accept requests",
-        "description": "The web app reports readiness after both preview APIs pass health checks. Python reports its parser; Go reports its engine version.",
+        "description": "The web app reports readiness after both preview APIs pass health checks. Python reports parser availability, model configuration, and whether its internal analysis-authentication key ring is configured; its health routes remain available when analysis authentication is disabled or misconfigured. Go reports its engine version.",
         "responses": {
           "200": {
             "description": "Service-specific readiness information.",
@@ -161,7 +161,7 @@
             }
           },
           "503": {
-            "description": "AI is unavailable, or the analysis service is unavailable or timed out.",
+            "description": "The internal analysis credential is unavailable, AI is unavailable, or the analysis service is unavailable or timed out.",
             "content": {
               "application/json": {
                 "schema": {
@@ -177,7 +177,7 @@
       "post": {
         "operationId": "analyzeBrief",
         "summary": "Analyze pasted text for source-linked work scope, missing information, and capabilities",
-        "description": "Python FastAPI endpoint. Accepts 30 to 20,000 characters and an optional team capability profile. Sample rules are local; AI mode runs a bounded specialist-agent analysis and verifies source evidence.",
+        "description": "Internal Python FastAPI endpoint called by the Next.js BFF only. Requires a short-lived bearer token with the briefs:analyze scope. Accepts 30 to 20,000 characters and an optional team capability profile. Sample rules are local; AI mode runs a bounded specialist-agent analysis and verifies source evidence.",
         "requestBody": {
           "required": true,
           "content": {
@@ -210,7 +210,7 @@
             }
           },
           "503": {
-            "description": "AI mode is not configured or the provider permissions are unavailable.",
+            "description": "Internal service authentication is misconfigured, or AI mode is not configured or provider permissions are unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -238,8 +238,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "The service token is missing, invalid, expired, for another audience, or lacks the exact pasted-text scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "briefServiceToken": []
+          }
+        ],
+        "x-required-service-scope": "briefs:analyze"
       }
     },
     "/v1/estimates": {
@@ -305,7 +321,7 @@
       "post": {
         "operationId": "analyzeClientDocument",
         "summary": "Extract and analyze a supported client document",
-        "description": "Python FastAPI multipart endpoint. Reads PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files locally, with a 10 MiB upload limit and bounded extracted text. Scanned PDFs without text are rejected with a clear extraction error.",
+        "description": "Internal Python FastAPI multipart endpoint called by the Next.js BFF only. Requires a short-lived bearer token with the briefs:analyze-document scope. Reads PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files locally, with a 10 MiB upload limit and bounded extracted text. Scanned PDFs without text are rejected with a clear extraction error.",
         "requestBody": {
           "required": true,
           "content": {
@@ -368,7 +384,7 @@
             }
           },
           "503": {
-            "description": "AI mode is not configured or the provider permissions are unavailable.",
+            "description": "Internal service authentication is misconfigured, or AI mode is not configured or provider permissions are unavailable.",
             "content": {
               "application/json": {
                 "schema": {
@@ -386,8 +402,24 @@
                 }
               }
             }
+          },
+          "401": {
+            "description": "The service token is missing, invalid, expired, for another audience, or lacks the exact document-analysis scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PythonError"
+                }
+              }
+            }
           }
-        }
+        },
+        "security": [
+          {
+            "briefServiceToken": []
+          }
+        ],
+        "x-required-service-scope": "briefs:analyze-document"
       }
     },
     "/v1/estimates/general": {
@@ -785,7 +817,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+              "schema": {
+                "$ref": "#/components/schemas/PrivateRecordUpdate"
+              }
             }
           }
         },
@@ -794,16 +828,30 @@
             "description": "The owner’s record title was updated.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordUpdated"
+                }
               }
             }
           },
-          "401": { "description": "A valid first-party identity session is required." },
-          "404": { "description": "The record is absent or belongs to another user." },
-          "413": { "description": "The title request exceeds the size limit." },
-          "503": { "description": "Private storage is unavailable." }
+          "401": {
+            "description": "A valid first-party identity session is required."
+          },
+          "404": {
+            "description": "The record is absent or belongs to another user."
+          },
+          "413": {
+            "description": "The title request exceeds the size limit."
+          },
+          "503": {
+            "description": "Private storage is unavailable."
+          }
         },
-        "security": [{ "identitySession": [] }]
+        "security": [
+          {
+            "identitySession": []
+          }
+        ]
       },
       "delete": {
         "operationId": "deletePrivateRecord",
@@ -1102,7 +1150,9 @@
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+              "schema": {
+                "$ref": "#/components/schemas/PrivateRecordUpdate"
+              }
             }
           },
           "description": "Title update body limit: 8,192 bytes."
@@ -1112,18 +1162,36 @@
             "description": "The encrypted record title was updated.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+                "schema": {
+                  "$ref": "#/components/schemas/PrivateRecordUpdated"
+                }
               }
             }
           },
-          "400": { "description": "The title request is invalid." },
-          "401": { "description": "A valid BFF service token with update scope is required." },
-          "404": { "description": "Record not found for token owner." },
-          "409": { "description": "The existing encrypted snapshot could not be safely updated." },
-          "413": { "description": "The request exceeds the body limit." },
-          "503": { "description": "Storage is unavailable." }
+          "400": {
+            "description": "The title request is invalid."
+          },
+          "401": {
+            "description": "A valid BFF service token with update scope is required."
+          },
+          "404": {
+            "description": "Record not found for token owner."
+          },
+          "409": {
+            "description": "The existing encrypted snapshot could not be safely updated."
+          },
+          "413": {
+            "description": "The request exceeds the body limit."
+          },
+          "503": {
+            "description": "Storage is unavailable."
+          }
         },
-        "security": [{ "serviceToken": [] }]
+        "security": [
+          {
+            "serviceToken": []
+          }
+        ]
       },
       "delete": {
         "operationId": "deleteEstimatorPrivateRecord",
@@ -1242,12 +1310,16 @@
           },
           "aiAvailable": {
             "type": "boolean"
+          },
+          "analysisAuthConfigured": {
+            "type": "boolean"
           }
         },
         "required": [
           "status",
           "parser",
-          "aiAvailable"
+          "aiAvailable",
+          "analysisAuthConfigured"
         ],
         "additionalProperties": false
       },
@@ -2553,18 +2625,34 @@
       "PrivateRecordUpdate": {
         "type": "object",
         "properties": {
-          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
         },
-        "required": ["title"],
+        "required": [
+          "title"
+        ],
         "additionalProperties": false
       },
       "PrivateRecordUpdated": {
         "type": "object",
         "properties": {
-          "id": { "type": "string", "format": "uuid" },
-          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
         },
-        "required": ["id", "title"],
+        "required": [
+          "id",
+          "title"
+        ],
         "additionalProperties": false
       },
       "PrivateRecordCreated": {
@@ -2685,6 +2773,21 @@
           "exp=<expiry within 60 seconds of iat>",
           "scope=<exact operation scope declared on route>",
           "owner_id must be absent"
+        ]
+      },
+      "briefServiceToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Short-lived BFF-to-Python HS256 token. It has a key ID, iss=the-estimator-web, exactly aud=the-estimator-brief-intelligence, sub=the-estimator-web, a random jti, iat, exp no more than 60 seconds after iat, and one exact endpoint scope. It carries no browser session, account identifier, project data, or record authorization claim.",
+        "x-required-claims": [
+          "iss=the-estimator-web",
+          "aud=the-estimator-brief-intelligence (exactly one audience)",
+          "sub=the-estimator-web",
+          "jti=<UUID token ID>",
+          "iat=<issued-at time>",
+          "exp=<expiry within 60 seconds of iat>",
+          "scope=briefs:analyze or briefs:analyze-document"
         ]
       }
     }

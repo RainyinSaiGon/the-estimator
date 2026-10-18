@@ -11,11 +11,12 @@ from datetime import datetime, timezone
 from pathlib import PurePosixPath
 
 import uvicorn
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 from agent_runtime import run_agent_analysis
 from document_ingest import MAX_UPLOAD_BYTES, extract_document
+from service_auth import ServiceAuthConfigurationError, analysis_service_auth, configured_service_token_keys, service_token_auth_status
 
 
 def _request_timeout_seconds() -> float:
@@ -34,6 +35,10 @@ REQUEST_ID_PATTERN = re.compile(
     r"^(?:[0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$",
     re.IGNORECASE,
 )
+ANALYSIS_SERVICE_SCOPES = {
+    "/v1/briefs/analyze": "briefs:analyze",
+    "/v1/briefs/analyze-document": "briefs:analyze-document",
+}
 
 
 class JsonLogFormatter(logging.Formatter):
@@ -96,8 +101,26 @@ class OperationsMiddleware:
             await send(message)
 
         try:
-            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
-                await self.app(scope, receive, send_with_request_id)
+            required_scope = ANALYSIS_SERVICE_SCOPES.get(path)
+            auth_status = None
+            if required_scope:
+                authorization = headers.get(b"authorization", b"").decode("latin-1")
+                auth_status = service_token_auth_status(authorization, required_scope)
+            if auth_status is not None:
+                detail = "Internal service authentication is not configured." if auth_status == 503 else "A valid internal service credential is required."
+                await send_with_request_id({
+                    "type": "http.response.start",
+                    "status": auth_status,
+                    "headers": [(b"content-type", b"application/json"), (b"cache-control", b"no-store")],
+                })
+                await send_with_request_id({
+                    "type": "http.response.body",
+                    "body": json.dumps({"detail": detail}, separators=(",", ":")).encode("utf-8"),
+                    "more_body": False,
+                })
+            else:
+                async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                    await self.app(scope, receive, send_with_request_id)
         except TimeoutError:
             status = 504
             if not response_started:
@@ -265,11 +288,20 @@ def live():
 
 @app.get("/health/ready")
 def ready():
-    return {"status": "ready", "parser": "sample", "aiAvailable": bool(os.environ.get("OPENAI_API_KEY", "").strip())}
+    try:
+        auth_configured = bool(configured_service_token_keys())
+    except ServiceAuthConfigurationError:
+        auth_configured = False
+    return {
+        "status": "ready",
+        "parser": "sample",
+        "aiAvailable": bool(os.environ.get("OPENAI_API_KEY", "").strip()),
+        "analysisAuthConfigured": auth_configured,
+    }
 
 
 @app.post("/v1/briefs/analyze")
-def analyze(request: AnalyzeRequest):
+def analyze(request: AnalyzeRequest, _service: None = Depends(analysis_service_auth("briefs:analyze"))):
     capabilities = validate_capabilities(request.capabilities)
     if request.parser == "sample":
         result = sample_scope(request.brief, capabilities)
@@ -290,7 +322,12 @@ def analyze(request: AnalyzeRequest):
 
 
 @app.post("/v1/briefs/analyze-document")
-async def analyze_document(file: UploadFile = File(...), parser: str = Form("sample"), capabilities: str = Form("[]")):
+async def analyze_document(
+    file: UploadFile = File(...),
+    parser: str = Form("sample"),
+    capabilities: str = Form("[]"),
+    _service: None = Depends(analysis_service_auth("briefs:analyze-document")),
+):
     raw = await file.read(MAX_UPLOAD_BYTES + 1)
     extracted = extract_document(PurePosixPath((file.filename or "client-file").replace("\\", "/")).name, raw)
     try:

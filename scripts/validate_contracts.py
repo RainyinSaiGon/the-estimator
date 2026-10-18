@@ -9,11 +9,13 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
+import jwt
 from jsonschema import Draft202012Validator
 from openapi_spec_validator import validate_spec
 
@@ -30,6 +32,9 @@ SAMPLE_BRIEF = (
     "Connect the systems for a nightly one-way sync, map company and contact fields, and "
     "reconcile duplicate records before handover."
 )
+BRIEF_TEST_SECRET = "contract-test-brief-service-secret-0123456789-abcdef"
+BRIEF_TEST_PREVIOUS_SECRET = "contract-test-brief-service-previous-secret-0123456789-abc"
+BRIEF_TEST_KEY_ID = "contract-check-2026-10"
 
 
 def local_ref_target(reference: str, spec: dict[str, Any]) -> Any:
@@ -87,12 +92,19 @@ def free_port() -> int:
         return int(listener.getsockname()[1])
 
 
-def json_request(url: str, payload: Any | None = None, timeout: float = 3) -> tuple[int, Any]:
+def json_request(
+    url: str,
+    payload: Any | None = None,
+    timeout: float = 3,
+    headers: dict[str, str] | None = None,
+) -> tuple[int, Any]:
     data = None if payload is None else json.dumps(payload).encode("utf-8")
+    request_headers = {"content-type": "application/json"} if data is not None else {}
+    request_headers.update(headers or {})
     request = Request(
         url,
         data=data,
-        headers={"content-type": "application/json"} if data is not None else {},
+        headers=request_headers,
         method="POST" if data is not None else "GET",
     )
     try:
@@ -102,7 +114,7 @@ def json_request(url: str, payload: Any | None = None, timeout: float = 3) -> tu
         return error.code, json.loads(error.read())
 
 
-def text_file_request(url: str, filename: str, content: str) -> tuple[int, Any]:
+def text_file_request(url: str, filename: str, content: str, headers: dict[str, str] | None = None) -> tuple[int, Any]:
     boundary = "estimator-contract-boundary"
     file_part = (
         f"--{boundary}\r\n"
@@ -118,7 +130,7 @@ def text_file_request(url: str, filename: str, content: str) -> tuple[int, Any]:
     request = Request(
         url,
         data=data,
-        headers={"content-type": f"multipart/form-data; boundary={boundary}"},
+        headers={"content-type": f"multipart/form-data; boundary={boundary}", **(headers or {})},
         method="POST",
     )
     try:
@@ -126,6 +138,21 @@ def text_file_request(url: str, filename: str, content: str) -> tuple[int, Any]:
             return response.status, json.loads(response.read())
     except HTTPError as error:
         return error.code, json.loads(error.read())
+
+
+def brief_service_token(scope: str, *, overrides: dict[str, Any] | None = None, key_id: str = BRIEF_TEST_KEY_ID, secret: str = BRIEF_TEST_SECRET) -> str:
+    issued_at = int(time.time())
+    claims: dict[str, Any] = {
+        "iss": "the-estimator-web",
+        "aud": "the-estimator-brief-intelligence",
+        "sub": "the-estimator-web",
+        "scope": scope,
+        "iat": issued_at,
+        "exp": issued_at + 45,
+        "jti": str(uuid.uuid4()),
+    }
+    claims.update(overrides or {})
+    return jwt.encode(claims, secret, algorithm="HS256", headers={"typ": "JWT", "kid": key_id})
 
 
 def wait_until_ready(process: subprocess.Popen[bytes], url: str, name: str) -> None:
@@ -155,8 +182,7 @@ def stop_process(process: subprocess.Popen[bytes] | None) -> None:
         process.wait(timeout=5)
 
 
-def check_structured_logs(process: subprocess.Popen[str], service: str) -> None:
-    output, _ = process.communicate(timeout=5)
+def check_structured_logs(output: str, service: str) -> None:
     lines = [line for line in output.splitlines() if line.strip()]
     if not lines:
         raise RuntimeError(f"{service} emitted no operational logs.")
@@ -197,6 +223,19 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
         if not isinstance(operation, dict) or operation.get("x-required-service-scope") != scope:
             raise ValueError(f"{method.upper()} {path} must declare service scope {scope!r}.")
 
+    for path, scope in {
+        "/v1/briefs/analyze": "briefs:analyze",
+        "/v1/briefs/analyze-document": "briefs:analyze-document",
+    }.items():
+        operation = paths.get(path, {}).get("post")
+        if (
+            not isinstance(operation, dict)
+            or operation.get("x-required-service-scope") != scope
+            or operation.get("security") != [{"briefServiceToken": []}]
+            or "401" not in operation.get("responses", {})
+        ):
+            raise ValueError(f"POST {path} must declare its internal service-token scope and 401 response.")
+
 
 def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:
     for path, component in (("/health/live", "HealthLive"), ("/health/ready", readiness_schema)):
@@ -206,10 +245,79 @@ def check_service_health(spec: dict[str, Any], base_url: str, name: str, readine
         validate_payload(spec, component, body, f"{name} {path} response")
 
 
+def check_brief_service_auth(spec: dict[str, Any], base_url: str) -> None:
+    endpoint = f"{base_url}/v1/briefs/analyze"
+    request = {"brief": SAMPLE_BRIEF, "parser": "sample"}
+    cases = {
+        "missing": None,
+        "expired": brief_service_token("briefs:analyze", overrides={"iat": int(time.time()) - 120, "exp": int(time.time()) - 60}),
+        "wrong issuer": brief_service_token("briefs:analyze", overrides={"iss": "another-service"}),
+        "wrong audience": brief_service_token("briefs:analyze", overrides={"aud": "the-estimator-go"}),
+        "wrong scope": brief_service_token("private-records:read"),
+        "unknown key ID": brief_service_token("briefs:analyze", key_id="unknown-key"),
+        "invalid signature": brief_service_token("briefs:analyze", secret="another-brief-service-secret-0123456789-abcdef-long"),
+        "overlong token lifetime": brief_service_token("briefs:analyze", overrides={"exp": int(time.time()) + 61}),
+    }
+    for name, token in cases.items():
+        headers = {} if token is None else {"authorization": f"Bearer {token}"}
+        status, body = json_request(endpoint, request, headers=headers)
+        if status != 401:
+            raise RuntimeError(f"Python brief service accepted {name} service credentials: HTTP {status} {body}")
+        validate_payload(spec, "PythonError", body, f"Python {name} credential rejection")
+
+    wrong_document_scope = brief_service_token("briefs:analyze")
+    document_status, document_body = text_file_request(
+        f"{base_url}/v1/briefs/analyze-document",
+        "fictional-client-brief.txt",
+        "A fictional onboarding guide and project planning workshop.",
+        headers={"authorization": f"Bearer {wrong_document_scope}"},
+    )
+    if document_status != 401:
+        raise RuntimeError(f"Python document service accepted the pasted-text scope: HTTP {document_status} {document_body}")
+    validate_payload(spec, "PythonError", document_body, "Python document wrong-scope rejection")
+
+    previous_key_token = brief_service_token(
+        "briefs:analyze",
+        key_id="previous-2026-09",
+        secret=BRIEF_TEST_PREVIOUS_SECRET,
+    )
+    previous_status, previous_body = json_request(
+        endpoint,
+        request,
+        headers={"authorization": f"Bearer {previous_key_token}"},
+    )
+    if previous_status != 200:
+        raise RuntimeError(f"Python service did not accept the configured previous key during rotation: HTTP {previous_status} {previous_body}")
+
+
+def check_brief_auth_unit_tests() -> None:
+    completed = subprocess.run(
+        [sys.executable, "-m", "unittest", "discover", "-s", str(BRIEF_DIR), "-p", "test_*.py"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "Python service-auth unit tests failed. "
+            f"stdout: {completed.stdout.strip()} stderr: {completed.stderr.strip()}"
+        )
+
+
 def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[str, Any]) -> None:
+    environment = {
+        **os.environ,
+        "BRIEF_SERVICE_TOKEN_SECRET": BRIEF_TEST_SECRET,
+        "BRIEF_SERVICE_TOKEN_KEY_ID": BRIEF_TEST_KEY_ID,
+        "SERVICE_TOKEN_SECRET": "separate-record-service-secret-0123456789-abcdef",
+    }
     completed = subprocess.run(
         ["node", "--experimental-strip-types", str(ROUTE_CHECK_PATH)],
         cwd=ROOT,
+        env=environment,
         input=json.dumps({"scope": scope, "estimate": estimate}),
         capture_output=True,
         check=False,
@@ -232,6 +340,7 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
     expected_statuses = {
         "analysis-success": 200,
         "document-analysis-success": 200,
+        "analysis-missing-service-configuration": 503,
         "malformed-json": 400,
         "oversized-body": 413,
         "ai-provider-error": 503,
@@ -247,6 +356,7 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         "estimator-timeout": 503,
     }
     expected_errors = {
+        "analysis-missing-service-configuration": "The analysis service is not configured.",
         "malformed-json": "Request body must be valid JSON.",
         "oversized-body": "Request body is too large.",
         "ai-provider-error": "AI session permission is missing.",
@@ -332,7 +442,15 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
         estimate_port = free_port()
 
     environment = os.environ.copy()
-    brief_env = {**environment, "HOST": "127.0.0.1", "PORT": str(brief_port), "REQUEST_TIMEOUT_SECONDS": "8"}
+    brief_env = {
+        **environment,
+        "HOST": "127.0.0.1",
+        "PORT": str(brief_port),
+        "REQUEST_TIMEOUT_SECONDS": "8",
+        "BRIEF_SERVICE_TOKEN_KEY_ID": BRIEF_TEST_KEY_ID,
+        "BRIEF_SERVICE_TOKEN_SECRET": BRIEF_TEST_SECRET,
+        "BRIEF_SERVICE_TOKEN_VERIFICATION_KEYS": json.dumps({"previous-2026-09": BRIEF_TEST_PREVIOUS_SECRET}),
+    }
     brief_env.pop("OPENAI_API_KEY", None)
     brief_env.pop("AGENT_MODEL", None)
     estimate_env = {**environment, "HOST": "127.0.0.1", "PORT": str(estimate_port), "REQUEST_TIMEOUT": "8s"}
@@ -341,17 +459,22 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
 
     with tempfile.TemporaryDirectory(prefix="estimator-contracts-") as temp_dir:
         executable = Path(temp_dir) / ("estimator.exe" if os.name == "nt" else "estimator")
+        brief_log_path = Path(temp_dir) / "brief-intelligence.log"
+        estimate_log_path = Path(temp_dir) / "estimator-go.log"
         subprocess.run(
             ["go", "build", "-o", str(executable), "./cmd/estimator"],
             cwd=ESTIMATOR_DIR,
             check=True,
         )
+        brief_log = brief_log_path.open("w+", encoding="utf-8")
+        estimate_log = estimate_log_path.open("w+", encoding="utf-8")
+
         try:
             brief_process = subprocess.Popen(
                 [sys.executable, str(BRIEF_DIR / "main.py")],
                 cwd=ROOT,
                 env=brief_env,
-                stdout=subprocess.PIPE,
+                stdout=brief_log,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
@@ -361,7 +484,7 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
                 [str(executable)],
                 cwd=ESTIMATOR_DIR,
                 env=estimate_env,
-                stdout=subprocess.PIPE,
+                stdout=estimate_log,
                 stderr=subprocess.STDOUT,
                 text=True,
                 encoding="utf-8",
@@ -374,11 +497,13 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             wait_until_ready(estimate_process, f"{estimate_base}/health/ready", "Go estimator")
             check_service_health(spec, brief_base, "Python brief service", "BriefServiceReady")
             check_service_health(spec, estimate_base, "Go estimator", "EstimatorServiceReady")
+            check_brief_service_auth(spec, brief_base)
             check_web_health(spec, brief_base, estimate_base)
 
             brief_request = {"brief": SAMPLE_BRIEF, "parser": "sample"}
             validate_payload(spec, "BriefAnalyzeRequest", brief_request, "Python request")
-            brief_status, scope = json_request(f"{brief_base}/v1/briefs/analyze", brief_request)
+            brief_headers = {"authorization": f"Bearer {brief_service_token('briefs:analyze')}"}
+            brief_status, scope = json_request(f"{brief_base}/v1/briefs/analyze", brief_request, headers=brief_headers)
             if brief_status != 200:
                 raise RuntimeError(f"Python brief service returned HTTP {brief_status}: {scope}")
             validate_payload(spec, "Scope", scope, "Python response")
@@ -391,6 +516,7 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
                 f"{brief_base}/v1/briefs/analyze-document",
                 "fictional-client-brief.txt",
                 document_brief,
+                headers={"authorization": f"Bearer {brief_service_token('briefs:analyze-document')}"},
             )
             if document_status != 200:
                 raise RuntimeError(f"Python document intake returned HTTP {document_status}: {document_scope}")
@@ -436,6 +562,7 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             general_status, general_scope = json_request(
                 f"{brief_base}/v1/briefs/analyze",
                 {"brief": general_brief, "parser": "sample"},
+                headers=brief_headers,
             )
             if general_status != 200 or general_scope.get("estimateMode") != "general":
                 raise RuntimeError(f"Expected general-work analysis for the fictional workshop brief, received {general_status}: {general_scope}")
@@ -479,13 +606,17 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
             validate_payload(spec, "PreviewRequest", ai_request, "BFF AI request")
             invalid_brief = "Too short."
             brief_error_status, brief_error = json_request(
-                f"{brief_base}/v1/briefs/analyze", {"brief": invalid_brief, "parser": "sample"}
+                f"{brief_base}/v1/briefs/analyze",
+                {"brief": invalid_brief, "parser": "sample"},
+                headers=brief_headers,
             )
             if brief_error_status != 422:
                 raise RuntimeError(f"Expected Python short-brief response 422, received {brief_error_status}.")
             validate_payload(spec, "PythonError", brief_error, "Python 422 response")
             parser_error_status, parser_error = json_request(
-                f"{brief_base}/v1/briefs/analyze", {"brief": SAMPLE_BRIEF, "parser": "ai"}
+                f"{brief_base}/v1/briefs/analyze",
+                {"brief": SAMPLE_BRIEF, "parser": "ai"},
+                headers=brief_headers,
             )
             if parser_error_status != 503:
                 raise RuntimeError(f"Expected Python unconfigured-parser response 503, received {parser_error_status}.")
@@ -508,8 +639,10 @@ def check_live_payloads(spec: dict[str, Any]) -> None:
         finally:
             stop_process(estimate_process)
             stop_process(brief_process)
-        check_structured_logs(brief_process, "brief-intelligence")
-        check_structured_logs(estimate_process, "estimator-go")
+            brief_log.close()
+            estimate_log.close()
+        check_structured_logs(brief_log_path.read_text(encoding="utf-8"), "brief-intelligence")
+        check_structured_logs(estimate_log_path.read_text(encoding="utf-8"), "estimator-go")
 
 
 def main() -> int:
@@ -521,6 +654,7 @@ def main() -> int:
         validate_spec(spec)
         validate_spec(identity_spec)
         validate_service_token_scopes(spec)
+        check_brief_auth_unit_tests()
         for component in spec["components"]["schemas"]:
             schema_for(spec, component)
         for component in identity_spec["components"]["schemas"]:

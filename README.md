@@ -27,15 +27,23 @@ Eight initial historical projects are **synthetic demonstration examples**. The 
 ## Run the new local service slice
 Use Docker Compose, which builds and starts the Next.js web app, Python brief service, and Go estimator service. Only the web app is published, bound to loopback at `http://127.0.0.1:3000/`.
 
+Before starting Compose, add a distinct internal Python service key and key ID to the ignored root `.env.local`. The same service key is shared only by the server-side BFF and Python; keep it different from the Go `SERVICE_TOKEN_SECRET` and all identity/storage keys. Generate a local value without sharing it:
+
 ```powershell
-docker compose up --build
+[Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 ```
 
-The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules; the Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. By default the local preview is ephemeral and stores no request or estimate records.
+Set the output as `BRIEF_SERVICE_TOKEN_SECRET`, set `BRIEF_SERVICE_TOKEN_KEY_ID=brief-local-2026-10`, then start the preview:
+
+```powershell
+docker compose --env-file .env.local up --build
+```
+
+The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules and needs no model-provider key; the internal BFF-to-Python service key is required for all analysis requests. The Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. By default the local preview is ephemeral and stores no request or estimate records.
 
 ### First-party identity and private workspaces
 
-The local identity service owns account credentials and revocable sessions. The Next.js BFF stores opaque session tokens in an HttpOnly, SameSite cookie; PostgreSQL is not published to the host. Private-record requests use a short-lived service token with the first-party account UUID, and Go applies owner isolation before reading, writing, or deleting encrypted snapshots.
+The local identity service owns account credentials and revocable sessions. The Next.js BFF stores opaque session tokens in an HttpOnly, SameSite cookie; PostgreSQL is not published to the host. Private-record requests use a short-lived service token with the first-party account UUID, and Go applies owner isolation before reading, writing, or deleting encrypted snapshots. Python uses its own audience- and scope-limited token; it has no identity/project database credentials or private-record permissions.
 
 To enable the local private workspace, copy the placeholders from `compose.private-records.env.example` into the ignored root `.env.local`, generate distinct random values for every password/key, and preserve any existing `OPENAI_API_KEY` line. Start all three overlays under a unique project name:
 
@@ -66,7 +74,7 @@ docker compose --env-file .env.local up --build
 
 The AI option runs the OpenAI Agents API with scope, delivery-risk, and capability specialists, followed by a source-evidence check. The user must select AI mode; provider errors do not switch to sample mode. The request text and any supplied team profile are sent to OpenAI for that run. The app deletes its agent session after completion, but this does not promise zero provider-side retention; use fictional or non-sensitive material in this local prototype. Reviewers can edit or remove findings, and the estimator is called only after they explicitly confirm the scope. Hosted AI and the public Site remain unchanged.
 
-For a source-based local development setup, use Node 22.13+, Go 1.26+, and Python 3.12+ in three terminals:
+For a source-based local development setup, use Node 22.13+, Go 1.26+, and Python 3.12+ in three terminals. The Next.js BFF and Python process need the matching `BRIEF_SERVICE_TOKEN_SECRET` and `BRIEF_SERVICE_TOKEN_KEY_ID` values from the ignored environment file; the key must not be the Go record-service key.
 
 ```powershell
 go run ./services/estimator-go/cmd/estimator
