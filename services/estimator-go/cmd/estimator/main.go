@@ -169,6 +169,7 @@ func main() {
 	mux.HandleFunc("POST /v1/records", records.handleRecords)
 	mux.HandleFunc("DELETE /v1/records", records.handleRecords)
 	mux.HandleFunc("GET /v1/records/{recordID}", records.handleRecord)
+	mux.HandleFunc("PATCH /v1/records/{recordID}", records.handleRecord)
 	mux.HandleFunc("DELETE /v1/records/{recordID}", records.handleRecord)
 	mux.HandleFunc("POST /v1/estimates", estimateHandler)
 	mux.HandleFunc("POST /v1/estimates/general", generalEstimateHandler)

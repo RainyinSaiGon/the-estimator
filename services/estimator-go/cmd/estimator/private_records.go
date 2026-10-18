@@ -71,6 +71,10 @@ type createRecordRequest struct {
 	Payload         json.RawMessage `json:"payload"`
 }
 
+type updateRecordRequest struct {
+	Title string `json:"title"`
+}
+
 type recordSummary struct {
 	ID        string    `json:"id"`
 	Title     string    `json:"title"`
@@ -372,6 +376,8 @@ func (store *recordStore) handleRecord(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet:
 		store.getRecord(w, r, principal, recordID)
+	case http.MethodPatch:
+		store.updateRecord(w, r, principal, recordID)
 	case http.MethodDelete:
 		store.deleteRecord(w, r, principal, recordID)
 	default:
@@ -507,6 +513,10 @@ func requiredRecordScope(method, path string) string {
 	case http.MethodGet:
 		if path == "/v1/records" || strings.HasPrefix(path, "/v1/records/") {
 			return "private-records:read"
+		}
+	case http.MethodPatch:
+		if strings.HasPrefix(path, "/v1/records/") {
+			return "private-records:update"
 		}
 	case http.MethodPost:
 		if path == "/v1/records" {
@@ -751,6 +761,94 @@ func (store *recordStore) getRecord(w http.ResponseWriter, r *http.Request, prin
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": recordID, "payload": json.RawMessage(payload), "createdAt": createdAt.UTC(), "expiresAt": expiresAt.UTC()})
+}
+
+func (store *recordStore) updateRecord(w http.ResponseWriter, r *http.Request, principal recordPrincipal, recordID string) {
+	r.Body = http.MaxBytesReader(w, r.Body, 8*1024)
+	defer r.Body.Close()
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	var input updateRecordRequest
+	if err := decoder.Decode(&input); err != nil {
+		var maxBytesError *http.MaxBytesError
+		if errors.As(err, &maxBytesError) {
+			writeJSON(w, http.StatusRequestEntityTooLarge, map[string]string{"error": "The private-record request is too large."})
+		} else {
+			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid private estimate title."})
+		}
+		return
+	}
+	if decoder.Decode(&struct{}{}) != io.EOF {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid private estimate title."})
+		return
+	}
+	title := strings.TrimSpace(input.Title)
+	if title == "" || len([]rune(title)) > 200 || strings.ContainsAny(title, "\r\n") {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a title between 1 and 200 characters."})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+	defer cancel()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var accountID string
+	var nonce, ciphertext []byte
+	err = tx.QueryRow(ctx, `SELECT r.account_id::text, r.content_nonce, r.content_ciphertext FROM estimator_records r JOIN estimator_accounts a ON a.id = r.account_id WHERE r.id = $1 AND a.owner_key = $2 AND r.expires_at > now() FOR UPDATE OF r`, recordID, store.ownerLookupKey(principal)).Scan(&accountID, &nonce, &ciphertext)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Private estimate not found."})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	payloadBytes, err := store.decryptField(accountID, recordID, "payload", nonce, ciphertext)
+	var payload recordPayload
+	if err != nil || json.Unmarshal(payloadBytes, &payload) != nil || !validRecordPayload(payload) {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "The private estimate could not be safely updated."})
+		return
+	}
+	var payloadFields map[string]json.RawMessage
+	if err := json.Unmarshal(payloadBytes, &payloadFields); err != nil || payloadFields == nil {
+		writeJSON(w, http.StatusConflict, map[string]string{"error": "The private estimate could not be safely updated."})
+		return
+	}
+	encodedTitle, err := json.Marshal(title)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	payloadFields["title"] = encodedTitle
+	updatedPayload, err := json.Marshal(payloadFields)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	titleNonce, titleCiphertext, err := store.encryptField(accountID, recordID, "title", []byte(title))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	payloadNonce, payloadCiphertext, err := store.encryptField(accountID, recordID, "payload", updatedPayload)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	if _, err = tx.Exec(ctx, `UPDATE estimator_records SET title_nonce = $1, title_ciphertext = $2, content_nonce = $3, content_ciphertext = $4 WHERE id = $5 AND account_id = $6 AND expires_at > now()`, titleNonce, titleCiphertext, payloadNonce, payloadCiphertext, recordID, accountID); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private estimate could not be updated."})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"id": recordID, "title": title})
 }
 
 func (store *recordStore) deleteRecord(w http.ResponseWriter, r *http.Request, principal recordPrincipal, recordID string) {

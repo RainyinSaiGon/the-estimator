@@ -104,6 +104,7 @@ func TestRequiredRecordScope(t *testing.T) {
 	}{
 		{http.MethodGet, "/v1/records", "private-records:read"},
 		{http.MethodGet, "/v1/records/0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce", "private-records:read"},
+		{http.MethodPatch, "/v1/records/0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce", "private-records:update"},
 		{http.MethodPost, "/v1/records", "private-records:create"},
 		{http.MethodDelete, "/v1/records", "private-records:delete"},
 		{http.MethodDelete, "/v1/records/0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce", "private-records:delete"},

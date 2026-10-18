@@ -7,15 +7,16 @@ import { accountForSession, identityAuthConfigured, identityRequest, sameOriginR
 import { configuredServiceUrl, logHttpResponse, resolveRequestId } from "./operations.ts";
 
 const maxRecordBytes = 15_000_000;
+const maxRecordUpdateBytes = 8 * 1024;
 const defaultServiceTokenKeyID = "legacy";
 
 function noStore(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
 }
 
-async function readBoundedBody(request: Request): Promise<ArrayBuffer | Response> {
+async function readBoundedBody(request: Request, maximumBytes = maxRecordBytes): Promise<ArrayBuffer | Response> {
   const contentLength = Number(request.headers.get("content-length") ?? 0);
-  if (contentLength > maxRecordBytes) return noStore({ error: "The saved estimate is too large." }, 413);
+  if (contentLength > maximumBytes) return noStore({ error: "The private-record request is too large." }, 413);
   const reader = request.body?.getReader();
   if (!reader) return new ArrayBuffer(0);
   const chunks: Uint8Array[] = [];
@@ -24,9 +25,9 @@ async function readBoundedBody(request: Request): Promise<ArrayBuffer | Response
     const { done, value } = await reader.read();
     if (done) break;
     size += value.byteLength;
-    if (size > maxRecordBytes) {
+    if (size > maximumBytes) {
       await reader.cancel();
-      return noStore({ error: "The saved estimate is too large." }, 413);
+      return noStore({ error: "The private-record request is too large." }, 413);
     }
     chunks.push(value);
   }
@@ -49,6 +50,7 @@ function activeServiceTokenKey() {
 function requiredServiceScope(method: string, path: string) {
   if (path === "/v1/records/migrate-owner") return method === "POST" ? "private-records:migrate" : null;
   if (method === "GET" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:read";
+  if (method === "PATCH" && path.startsWith("/v1/records/")) return "private-records:update";
   if (method === "POST" && path === "/v1/records") return "private-records:create";
   if (method === "DELETE" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:delete";
   return null;
@@ -112,7 +114,7 @@ export async function proxyPrivateRecordRequest(request: Request, servicePath: s
   const startedAt = performance.now();
   let response: Response;
   try {
-    if (request.method === "POST" || request.method === "DELETE") {
+    if (request.method === "POST" || request.method === "PATCH" || request.method === "DELETE") {
       if (!sameOriginRequest(request) || request.headers.get("sec-fetch-site") === "cross-site") {
         response = noStore({ error: "This workspace request could not be verified." }, 403);
         return logHttpResponse(request, response, requestId, startedAt);
@@ -127,12 +129,12 @@ export async function proxyPrivateRecordRequest(request: Request, servicePath: s
     if (authorization instanceof Response) response = authorization;
     else {
       const serviceUrl = configuredServiceUrl("ESTIMATOR_SERVICE_URL", "http://127.0.0.1:8002");
-      if (request.method === "POST") {
+      if (request.method === "POST" || request.method === "PATCH") {
         if (!request.headers.get("content-type")?.toLowerCase().startsWith("application/json")) {
-          response = noStore({ error: "Use a JSON estimate snapshot." }, 415);
+          response = noStore({ error: "Use a JSON private-record request." }, 415);
           return logHttpResponse(request, response, requestId, startedAt);
         }
-        const boundedBody = await readBoundedBody(request);
+        const boundedBody = await readBoundedBody(request, request.method === "PATCH" ? maxRecordUpdateBytes : maxRecordBytes);
         response = boundedBody instanceof Response
           ? boundedBody
           : await forwardPrivateRecordRequest(request, serviceUrl, servicePath, authorization, requestId, boundedBody);

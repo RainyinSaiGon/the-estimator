@@ -188,6 +188,7 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
         ("/v1/records", "post"): "private-records:create",
         ("/v1/records", "delete"): "private-records:delete",
         ("/v1/records/{recordID}", "get"): "private-records:read",
+        ("/v1/records/{recordID}", "patch"): "private-records:update",
         ("/v1/records/{recordID}", "delete"): "private-records:delete",
     }
     paths = spec["paths"]

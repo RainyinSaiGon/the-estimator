@@ -777,6 +777,34 @@
           }
         ]
       },
+      "patch": {
+        "operationId": "renamePrivateRecord",
+        "summary": "Rename a saved estimate without changing its reviewed estimate",
+        "description": "Only the encrypted title changes. The original brief, reviewed scope, estimate, and evidence remain frozen. Owner authorization is checked by the Go record service.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The owner’s record title was updated.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+              }
+            }
+          },
+          "401": { "description": "A valid first-party identity session is required." },
+          "404": { "description": "The record is absent or belongs to another user." },
+          "413": { "description": "The title request exceeds the size limit." },
+          "503": { "description": "Private storage is unavailable." }
+        },
+        "security": [{ "identitySession": [] }]
+      },
       "delete": {
         "operationId": "deletePrivateRecord",
         "summary": "Delete one of the caller’s saved estimates",
@@ -1140,6 +1168,38 @@
             "serviceToken": []
           }
         ]
+      },
+      "patch": {
+        "operationId": "updateEstimatorPrivateRecordTitle",
+        "summary": "Update the owner-scoped record title",
+        "description": "Changes only the encrypted title. The frozen brief, reviewed scope, estimate, and evidence remain unchanged.",
+        "x-required-service-scope": "private-records:update",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PrivateRecordUpdate" }
+            }
+          },
+          "description": "Title update body limit: 8,192 bytes."
+        },
+        "responses": {
+          "200": {
+            "description": "The encrypted record title was updated.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PrivateRecordUpdated" }
+              }
+            }
+          },
+          "400": { "description": "The title request is invalid." },
+          "401": { "description": "A valid BFF service token with update scope is required." },
+          "404": { "description": "Record not found for token owner." },
+          "409": { "description": "The existing encrypted snapshot could not be safely updated." },
+          "413": { "description": "The request exceeds the body limit." },
+          "503": { "description": "Storage is unavailable." }
+        },
+        "security": [{ "serviceToken": [] }]
       },
       "delete": {
         "operationId": "deleteEstimatorPrivateRecord",
@@ -2589,6 +2649,23 @@
           "reviewConfirmed",
           "payload"
         ],
+        "additionalProperties": false
+      },
+      "PrivateRecordUpdate": {
+        "type": "object",
+        "properties": {
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["title"],
+        "additionalProperties": false
+      },
+      "PrivateRecordUpdated": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "title": { "type": "string", "minLength": 1, "maxLength": 200 }
+        },
+        "required": ["id", "title"],
         "additionalProperties": false
       },
       "PrivateRecordCreated": {
