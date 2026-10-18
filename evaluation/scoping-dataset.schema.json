@@ -26,10 +26,20 @@
         "reviewerId": { "type": ["string", "null"] },
         "approvedAt": { "type": ["string", "null"], "format": "date-time" },
         "rubricVersion": { "type": "string", "minLength": 1 },
-        "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+        "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
         "adjudicationNote": { "type": ["string", "null"] }
       },
       "required": ["status", "reviewerId", "approvedAt", "rubricVersion", "independentReviewers", "adjudicationNote"],
+      "allOf": [{
+        "if": { "properties": { "status": { "const": "approved" } }, "required": ["status"] },
+        "then": {
+          "properties": {
+            "reviewerId": { "type": "string", "minLength": 1 },
+            "approvedAt": { "type": "string", "format": "date-time" },
+            "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 2, "uniqueItems": true }
+          }
+        }
+      }],
       "additionalProperties": false
     },
     "expected": {

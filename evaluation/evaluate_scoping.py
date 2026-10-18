@@ -89,8 +89,18 @@ def evaluate(dataset: list[dict[str, Any]], predictions: list[dict[str, Any]]) -
         raise ValueError("no reviewer-approved cases; draft labels are never treated as ground truth")
     for case in approved:
         approval = case.get("approval", {})
-        if not isinstance(approval.get("reviewerId"), str) or not approval["reviewerId"].strip() or not approval.get("approvedAt") or not approval.get("rubricVersion") or not approval.get("independentReviewers"):
-            raise ValueError(f"approved case {case.get('caseId')} needs an attributable approval and an independent reviewer")
+        reviewers = approval.get("independentReviewers")
+        if (
+            not isinstance(approval.get("reviewerId"), str)
+            or not approval["reviewerId"].strip()
+            or not approval.get("approvedAt")
+            or not approval.get("rubricVersion")
+            or not isinstance(reviewers, list)
+            or len(reviewers) < 2
+            or any(not isinstance(reviewer, str) or not reviewer.strip() for reviewer in reviewers)
+            or len({reviewer.strip() for reviewer in reviewers}) != len(reviewers)
+        ):
+            raise ValueError(f"approved case {case.get('caseId')} needs an attributable approval and two distinct independent reviewers")
     case_ids = [case.get("caseId") for case in approved]
     if any(not isinstance(case_id, str) or not case_id for case_id in case_ids) or len(set(case_ids)) != len(case_ids):
         raise ValueError("approved case IDs must be non-empty and unique")

@@ -34,7 +34,7 @@ class EvaluationTests(unittest.TestCase):
     def test_scoping_metrics_include_explicit_denominators(self):
         case = scope_case()
         case["brief"] = "Please import contacts from a CSV. The portal API is unknown."
-        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2"]})
+        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2", "reviewer-3"]})
         prediction = {"caseId": "case-1", "requirements": [{"id": "prediction-1", "evidence": "import contacts from a CSV"}], "coveredExpectedRequirementIds": ["import"], "predictedMissingQuestionCount": 1, "matchedMissingQuestionIds": ["api"], "capabilityJudgments": [{"capability": "gateway", "judgment": "supported"}], "reviewerCorrections": 2, "minutesToReviewableScope": 5}
         result = evaluate_scope([case], [prediction])
         self.assertEqual(result["overall"]["requirementCoverage"], {"numerator": 1, "denominator": 1, "value": 1.0})
@@ -44,6 +44,15 @@ class EvaluationTests(unittest.TestCase):
     def test_unapproved_scoping_examples_are_not_ground_truth(self):
         with self.assertRaisesRegex(ValueError, "no reviewer-approved cases"):
             evaluate_scope([scope_case("draft")], [])
+
+    def test_approved_scoping_case_requires_two_distinct_independent_reviewers(self):
+        case = scope_case()
+        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2"]})
+        with self.assertRaisesRegex(ValueError, "two distinct independent reviewers"):
+            evaluate_scope([case], [])
+        case["approval"]["independentReviewers"] = ["reviewer-2", " reviewer-2 "]
+        with self.assertRaisesRegex(ValueError, "two distinct independent reviewers"):
+            evaluate_scope([case], [])
 
     def test_delivery_holdout_excludes_training_and_added_scope(self):
         holdout_id = next(f"record-{index}" for index in range(100) if expected_split(f"record-{index}") == "holdout")

@@ -4,7 +4,17 @@ This folder contains repeatable, local evaluation tooling. No client brief is in
 
 ## Scoping set
 
-Use the rubric in `scoping-rubric.md`. A reviewer records source-supported requirements, exact evidence passages, missing questions, and capability-fit labels. A second reviewer independently labels the case. Resolve disagreements with a short adjudication note and preserve both original reviews. Approval records reviewer ID, timestamp, rubric version, and provenance. Keep personal or client material out of this repository unless the owner has consented to its use.
+Use the rubric in `scoping-rubric.md`. Two distinct reviewers independently label each case. They record source-supported requirements, exact evidence passages, missing questions, and capability-fit labels. Resolve disagreements with a short adjudication note and preserve both original reviews. Approval records reviewer ID, timestamp, rubric version, and provenance. Keep personal or client material out of this repository unless the owner has consented to its use.
+
+### Inclusion criteria
+
+- Include a brief only when its original source text is available and the requested work can be reviewed against that source.
+- Sample across supported domains, brief lengths, and levels of ambiguity; record domain and inclusion rationale for every case.
+- Include both explicit requirements and materially important unknowns when they are present. Do not select cases based on whether the estimator handled them well.
+- Use fictional examples or client material with documented consent. Remove names, contact details, credentials, and other unnecessary identifying details before adding a case.
+- Exclude duplicate or near-duplicate briefs, incomplete source extracts, cases with unresolved consent, and any material derived from the delivery holdout.
+
+An approved case requires two distinct independent reviewer IDs, an attributable approval, a UTC timestamp, and a rubric version. The schema and evaluator enforce distinct reviewers; they do not replace human review or adjudication.
 
 Run:
 
