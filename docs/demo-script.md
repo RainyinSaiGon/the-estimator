@@ -32,7 +32,7 @@ Use a fictional CRM request; the example is not real client data. Start with the
 
 ## Local agent-led preview
 
-The Next.js/Python/Go preview is a separate local architecture slice, not the hosted judge workspace. Follow [README.md](../README.md#run-the-new-local-service-slice) to start it. The base Compose setup keeps requests ephemeral; [optional first-party identity and private-record services](../README.md#first-party-identity-and-private-workspaces) enable signed-in, user-scoped saves. Use fictional material throughout.
+The Next.js/Python/Go preview is a separate local architecture slice, not the hosted judge workspace. Follow [Local development](local-development.md#default-service-preview) to start it. The base Compose setup keeps requests ephemeral; [the optional private-workspace setup](local-development.md#optional-private-workspace) enables signed-in, user-scoped saves. Use fictional material throughout.
 
 1. Open `http://127.0.0.1:3000/estimate` and load the fictional CRM sample. If the OpenAI provider is configured, choose **AI specialist agents** and analyze it. Otherwise, choose **Sample rules**. The sample path is deterministic and makes no AI provider call.
 2. In AI mode, explain the data flow before analyzing: the Python analysis service extracts text from an uploaded file; OpenAI receives the request text (extracted text for a file), supplied team capabilities, and the source name and file type. The uploaded file bytes are not sent to OpenAI. Only submit client material you are authorized to share with OpenAI.
