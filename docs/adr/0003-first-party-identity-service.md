@@ -63,5 +63,6 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 
 - [OWASP Password Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Password_Storage_Cheat_Sheet.html)
 - [OWASP Session Management Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Session_Management_Cheat_Sheet.html)
+- [First-party identity threat model and production gates](../identity-threat-model.md)
 - [Go `crypto/rand` documentation](https://pkg.go.dev/crypto/rand)
 - [Go `x/crypto/argon2` package](https://pkg.go.dev/golang.org/x/crypto/argon2)

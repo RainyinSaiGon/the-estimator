@@ -31,11 +31,11 @@ import (
 var privateRecordSchema string
 
 type recordStore struct {
-	pool          *pgxpool.Pool
-	serviceSecret []byte
-	contentKey    []byte
-	identityKey   []byte
-	retentionDays int
+	pool             *pgxpool.Pool
+	serviceTokenKeys map[string][]byte
+	contentKey       []byte
+	identityKey      []byte
+	retentionDays    int
 }
 
 type recordPrincipal struct {
@@ -81,16 +81,22 @@ type recordSummary struct {
 func openRecordStore() (*recordStore, error) {
 	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
 	serviceSecret := strings.TrimSpace(os.Getenv("SERVICE_TOKEN_SECRET"))
+	serviceTokenKeyID := strings.TrimSpace(os.Getenv("SERVICE_TOKEN_KEY_ID"))
+	serviceTokenVerificationKeys := strings.TrimSpace(os.Getenv("SERVICE_TOKEN_VERIFICATION_KEYS"))
 	contentKeyValue := strings.TrimSpace(os.Getenv("CLIENT_CONTENT_KEY"))
 	identityKeyValue := strings.TrimSpace(os.Getenv("IDENTITY_INDEX_KEY"))
-	if databaseURL == "" && serviceSecret == "" && contentKeyValue == "" && identityKeyValue == "" {
+	if databaseURL == "" && serviceSecret == "" && serviceTokenKeyID == "" && serviceTokenVerificationKeys == "" && contentKeyValue == "" && identityKeyValue == "" {
 		return nil, nil
 	}
 	if databaseURL == "" || serviceSecret == "" || contentKeyValue == "" || identityKeyValue == "" {
 		return nil, errors.New("private-record configuration is incomplete")
 	}
-	if len([]byte(serviceSecret)) < 32 {
-		return nil, errors.New("service-token secret must contain at least 32 bytes")
+	if serviceTokenKeyID == "" {
+		serviceTokenKeyID = "legacy"
+	}
+	serviceTokenKeys, err := configuredServiceTokenKeys(serviceTokenKeyID, serviceSecret, serviceTokenVerificationKeys)
+	if err != nil {
+		return nil, err
 	}
 	contentKey, err := base64.StdEncoding.DecodeString(contentKeyValue)
 	if err != nil || len(contentKey) != 32 {
@@ -120,7 +126,7 @@ func openRecordStore() (*recordStore, error) {
 	if err != nil {
 		return nil, errors.New("database pool could not be started")
 	}
-	store := &recordStore{pool: pool, serviceSecret: []byte(serviceSecret), contentKey: contentKey, identityKey: identityKey, retentionDays: retentionDays}
+	store := &recordStore{pool: pool, serviceTokenKeys: serviceTokenKeys, contentKey: contentKey, identityKey: identityKey, retentionDays: retentionDays}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := pool.Ping(ctx); err != nil {
@@ -375,11 +381,12 @@ func (store *recordStore) handleRecord(w http.ResponseWriter, r *http.Request) {
 
 func (store *recordStore) authorize(w http.ResponseWriter, r *http.Request) (recordPrincipal, bool) {
 	header := r.Header.Get("Authorization")
-	if !strings.HasPrefix(header, "Bearer ") || len(header) > 10_000 {
+	requiredScope := requiredRecordScope(r.Method, r.URL.Path)
+	if requiredScope == "" || !strings.HasPrefix(header, "Bearer ") || len(header) > 10_000 {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in to access your private workspace."})
 		return recordPrincipal{}, false
 	}
-	principal, err := verifyServiceToken(strings.TrimPrefix(header, "Bearer "), store.serviceSecret, time.Now())
+	principal, err := verifyServiceToken(strings.TrimPrefix(header, "Bearer "), store.serviceTokenKeys, requiredScope, time.Now())
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in again to access private records."})
 		return recordPrincipal{}, false
@@ -387,7 +394,7 @@ func (store *recordStore) authorize(w http.ResponseWriter, r *http.Request) (rec
 	return principal, true
 }
 
-func verifyServiceToken(token string, secret []byte, now time.Time) (recordPrincipal, error) {
+func verifyServiceToken(token string, keys map[string][]byte, requiredScope string, now time.Time) (recordPrincipal, error) {
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 || len(parts[0]) > 2048 || len(parts[1]) > 8192 || len(parts[2]) > 256 {
 		return recordPrincipal{}, errors.New("invalid token")
@@ -399,8 +406,17 @@ func verifyServiceToken(token string, secret []byte, now time.Time) (recordPrinc
 	var header struct {
 		Algorithm string `json:"alg"`
 		Type      string `json:"typ"`
+		KeyID     string `json:"kid"`
 	}
 	if json.Unmarshal(headerBytes, &header) != nil || header.Algorithm != "HS256" || header.Type != "JWT" {
+		return recordPrincipal{}, errors.New("invalid token")
+	}
+	keyID := header.KeyID
+	if keyID == "" {
+		keyID = "legacy"
+	}
+	secret, ok := keys[keyID]
+	if !ok {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
 	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
@@ -425,6 +441,7 @@ func verifyServiceToken(token string, secret []byte, now time.Time) (recordPrinc
 	issuer, _ := claims["iss"].(string)
 	subject, _ := claims["sub"].(string)
 	identityAuthority, _ := claims["identity_authority"].(string)
+	scope, _ := claims["scope"].(string)
 	identityIssuer, _ := claims["oidc_issuer"].(string)
 	legacyIssuer, _ := claims["legacy_oidc_issuer"].(string)
 	legacySubject, _ := claims["legacy_oidc_subject"].(string)
@@ -448,7 +465,7 @@ func verifyServiceToken(token string, secret []byte, now time.Time) (recordPrinc
 		notBefore, ok := numericClaim(rawNotBefore)
 		notBeforeOK = ok && notBefore <= unixNow+30
 	}
-	if issuer != "the-estimator-web" || !audienceOK || !expOK || !iatOK || !notBeforeOK || expiration <= unixNow-30 || issuedAt > unixNow+30 || expiration <= issuedAt || expiration-issuedAt > 120 || subject == "" || len(subject) > 512 || jti == "" || len(jti) > 128 {
+	if issuer != "the-estimator-web" || !audienceOK || !expOK || !iatOK || !notBeforeOK || expiration <= unixNow-30 || issuedAt > unixNow+30 || expiration <= issuedAt || expiration-issuedAt > 120 || subject == "" || len(subject) > 512 || jti == "" || len(jti) > 128 || scope != requiredScope {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
 
@@ -477,6 +494,72 @@ func verifyServiceToken(token string, secret []byte, now time.Time) (recordPrinc
 		principal.legacySubject = legacySubject
 	}
 	return principal, nil
+}
+
+func requiredRecordScope(method, path string) string {
+	if path == "/v1/records/migrate-owner" {
+		if method == http.MethodPost {
+			return "private-records:migrate"
+		}
+		return ""
+	}
+	switch method {
+	case http.MethodGet:
+		if path == "/v1/records" || strings.HasPrefix(path, "/v1/records/") {
+			return "private-records:read"
+		}
+	case http.MethodPost:
+		if path == "/v1/records" {
+			return "private-records:create"
+		}
+	case http.MethodDelete:
+		if path == "/v1/records" || strings.HasPrefix(path, "/v1/records/") {
+			return "private-records:delete"
+		}
+	}
+	return ""
+}
+
+func configuredServiceTokenKeys(activeKeyID, activeSecret, verificationKeysJSON string) (map[string][]byte, error) {
+	if !validServiceTokenKeyID(activeKeyID) || len([]byte(activeSecret)) < 32 {
+		return nil, errors.New("service-token active key ID and secret are invalid")
+	}
+	keys := map[string][]byte{activeKeyID: []byte(activeSecret)}
+	if verificationKeysJSON == "" {
+		return keys, nil
+	}
+	var previous map[string]string
+	if len(verificationKeysJSON) > 16*1024 || json.Unmarshal([]byte(verificationKeysJSON), &previous) != nil || previous == nil || len(previous) > 8 {
+		return nil, errors.New("service-token verification keys must be a JSON object with at most eight entries")
+	}
+	for keyID, secret := range previous {
+		if !validServiceTokenKeyID(keyID) || len([]byte(secret)) < 32 {
+			return nil, errors.New("service-token verification key ID or secret is invalid")
+		}
+		if active, exists := keys[keyID]; exists && !hmac.Equal(active, []byte(secret)) {
+			return nil, errors.New("service-token key ID is configured with conflicting secrets")
+		}
+		keys[keyID] = []byte(secret)
+	}
+	return keys, nil
+}
+
+func validServiceTokenKeyID(value string) bool {
+	if len(value) == 0 || len(value) > 64 {
+		return false
+	}
+	for _, char := range value {
+		if char < 'a' || char > 'z' {
+			if char < 'A' || char > 'Z' {
+				if char < '0' || char > '9' {
+					if char != '-' && char != '_' && char != '.' {
+						return false
+					}
+				}
+			}
+		}
+	}
+	return true
 }
 
 func numericClaim(value any) (int64, bool) {

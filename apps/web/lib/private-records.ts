@@ -7,6 +7,7 @@ import { accountForSession, identityAuthConfigured, identityRequest, sameOriginR
 import { configuredServiceUrl, logHttpResponse, resolveRequestId } from "./operations.ts";
 
 const maxRecordBytes = 15_000_000;
+const defaultServiceTokenKeyID = "legacy";
 
 function noStore(body: unknown, status = 200) {
   return Response.json(body, { status, headers: { "cache-control": "no-store" } });
@@ -38,29 +39,44 @@ async function readBoundedBody(request: Request): Promise<ArrayBuffer | Response
   return bytes.buffer;
 }
 
-async function serviceAuthorization(): Promise<string | Response> {
+function activeServiceTokenKey() {
+  const secret = process.env.SERVICE_TOKEN_SECRET?.trim() ?? "";
+  const keyID = process.env.SERVICE_TOKEN_KEY_ID?.trim() || defaultServiceTokenKeyID;
+  if (!secret || new TextEncoder().encode(secret).byteLength < 32 || !/^[A-Za-z0-9._-]{1,64}$/.test(keyID)) return null;
+  return { keyID, secret };
+}
+
+function requiredServiceScope(method: string, path: string) {
+  if (path === "/v1/records/migrate-owner") return method === "POST" ? "private-records:migrate" : null;
+  if (method === "GET" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:read";
+  if (method === "POST" && path === "/v1/records") return "private-records:create";
+  if (method === "DELETE" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:delete";
+  return null;
+}
+
+async function serviceAuthorization(scope: string): Promise<string | Response> {
   if (!identityAuthConfigured()) return noStore({ error: "First-party sign-in has not been configured." }, 503);
-  const secret = process.env.SERVICE_TOKEN_SECRET?.trim();
-  if (!secret || new TextEncoder().encode(secret).byteLength < 32) return noStore({ error: "Private records are not configured." }, 503);
+  const key = activeServiceTokenKey();
+  if (!key) return noStore({ error: "Private records are not configured." }, 503);
 
   const session = await accountForSession();
   if (!session) {
     return noStore({ error: "Sign in to access your private workspace." }, 401);
   }
 
-  return serviceToken(secret, { identity_authority: "first-party-v1" }, session.account.accountId);
+  return serviceToken(key, { identity_authority: "first-party-v1" }, session.account.accountId, scope);
 }
 
-async function serviceToken(secret: string, claims: Record<string, string>, subject: string) {
-  const token = await new SignJWT(claims)
-    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
+async function serviceToken(key: { keyID: string; secret: string }, claims: Record<string, string>, subject: string, scope: string) {
+  const token = await new SignJWT({ ...claims, scope })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT", kid: key.keyID })
     .setIssuer("the-estimator-web")
     .setAudience("the-estimator-go")
     .setSubject(subject)
     .setIssuedAt()
     .setExpirationTime("60s")
     .setJti(randomUUID())
-    .sign(new TextEncoder().encode(secret));
+    .sign(new TextEncoder().encode(key.secret));
   return `Bearer ${token}`;
 }
 
@@ -69,8 +85,8 @@ async function migrationAuthorization(request: Request): Promise<string | Respon
   if (!oidcConfigured || !oidcConfiguration) return noStore({ error: "The previous sign-in provider is not configured for workspace migration." }, 503);
   const firstParty = await accountForSession();
   if (!firstParty) return noStore({ error: "Sign in to your new account before moving the old workspace." }, 401);
-  const secret = process.env.SERVICE_TOKEN_SECRET?.trim();
-  if (!secret || new TextEncoder().encode(secret).byteLength < 32) return noStore({ error: "Private records are not configured." }, 503);
+  const key = activeServiceTokenKey();
+  if (!key) return noStore({ error: "Private records are not configured." }, 503);
 
   let legacySession;
   try {
@@ -84,11 +100,11 @@ async function migrationAuthorization(request: Request): Promise<string | Respon
     return noStore({ error: "Sign in with the previous provider to migrate its workspace." }, 401);
   }
 
-  return serviceToken(secret, {
+  return serviceToken(key, {
     identity_authority: "first-party-v1",
     legacy_oidc_issuer: issuer,
     legacy_oidc_subject: subject,
-  }, firstParty.account.accountId);
+  }, firstParty.account.accountId, "private-records:migrate");
 }
 
 export async function proxyPrivateRecordRequest(request: Request, servicePath: string) {
@@ -102,7 +118,12 @@ export async function proxyPrivateRecordRequest(request: Request, servicePath: s
         return logHttpResponse(request, response, requestId, startedAt);
       }
     }
-    const authorization = await serviceAuthorization();
+    const scope = requiredServiceScope(request.method, servicePath);
+    if (!scope) {
+      response = noStore({ error: "This private-record operation is not supported." }, 405);
+      return logHttpResponse(request, response, requestId, startedAt);
+    }
+    const authorization = await serviceAuthorization(scope);
     if (authorization instanceof Response) response = authorization;
     else {
       const serviceUrl = configuredServiceUrl("ESTIMATOR_SERVICE_URL", "http://127.0.0.1:8002");
@@ -180,7 +201,7 @@ export async function privateRecordStatus() {
   if (!identityHealth?.ok) {
     return noStore({ identityConfigured: true, legacyMigrationAvailable: oidcConfigured && oidcConfiguration !== null, recordsEnabled: false, retentionDays, message: "The identity service is not reachable." });
   }
-  if (!process.env.SERVICE_TOKEN_SECRET || new TextEncoder().encode(process.env.SERVICE_TOKEN_SECRET).byteLength < 32) {
+  if (!activeServiceTokenKey()) {
     return noStore({ identityConfigured: true, legacyMigrationAvailable: oidcConfigured, recordsEnabled: false, retentionDays, message: "Private storage is not fully configured." });
   }
   try {

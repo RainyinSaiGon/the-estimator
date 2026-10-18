@@ -3,7 +3,7 @@
   "info": {
     "title": "The Estimator first-party identity API",
     "version": "1.0.0",
-    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime."
+    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Email verification and password recovery are intentionally unavailable in the local preview; an account with a lost password cannot self-recover."
   },
   "servers": [
     {

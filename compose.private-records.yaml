@@ -20,6 +20,8 @@ services:
     environment:
       DATABASE_URL: postgres://estimator:${POSTGRES_PASSWORD}@postgres:5432/estimator?sslmode=disable
       SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:?Set SERVICE_TOKEN_SECRET in the ignored local env file}
+      SERVICE_TOKEN_KEY_ID: ${SERVICE_TOKEN_KEY_ID:-legacy}
+      SERVICE_TOKEN_VERIFICATION_KEYS: ${SERVICE_TOKEN_VERIFICATION_KEYS:-}
       CLIENT_CONTENT_KEY: ${CLIENT_CONTENT_KEY:?Set CLIENT_CONTENT_KEY in the ignored local env file}
       IDENTITY_INDEX_KEY: ${IDENTITY_INDEX_KEY:?Set IDENTITY_INDEX_KEY in the ignored local env file}
       RECORD_RETENTION_DAYS: ${RECORD_RETENTION_DAYS:-90}
@@ -36,6 +38,7 @@ services:
       OIDC_CLIENT_ID: ${OIDC_CLIENT_ID:-}
       OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET:-}
       SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:?Set SERVICE_TOKEN_SECRET in the ignored local env file}
+      SERVICE_TOKEN_KEY_ID: ${SERVICE_TOKEN_KEY_ID:-legacy}
 
 volumes:
   estimator-postgres-data:
