@@ -7,6 +7,8 @@
     "caseId": { "type": "string", "minLength": 1 },
     "domain": { "type": "string", "minLength": 1 },
     "cohort": { "type": "string", "minLength": 1 },
+    "inclusionRationale": { "type": "string", "minLength": 1 },
+    "exclusions": { "type": "array", "items": { "type": "string", "minLength": 1 } },
     "provenance": {
       "type": "object",
       "properties": {
@@ -27,32 +29,52 @@
         "approvedAt": { "type": ["string", "null"], "format": "date-time" },
         "rubricVersion": { "type": "string", "minLength": 1 },
         "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "uniqueItems": true },
+        "reviewRecords": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "reviewerId": { "type": "string", "minLength": 1 },
+              "reviewedAt": { "type": "string", "format": "date-time" },
+              "rubricVersion": { "type": "string", "minLength": 1 },
+              "expected": { "$ref": "#/$defs/expectedFindings" }
+            },
+            "required": ["reviewerId", "reviewedAt", "rubricVersion", "expected"],
+            "additionalProperties": false
+          }
+        },
         "adjudicationNote": { "type": ["string", "null"] }
       },
-      "required": ["status", "reviewerId", "approvedAt", "rubricVersion", "independentReviewers", "adjudicationNote"],
+      "required": ["status", "reviewerId", "approvedAt", "rubricVersion", "independentReviewers", "reviewRecords", "adjudicationNote"],
       "allOf": [{
         "if": { "properties": { "status": { "const": "approved" } }, "required": ["status"] },
         "then": {
           "properties": {
             "reviewerId": { "type": "string", "minLength": 1 },
             "approvedAt": { "type": "string", "format": "date-time" },
-            "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 2, "uniqueItems": true }
-          }
+            "independentReviewers": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 2, "uniqueItems": true },
+            "reviewRecords": { "type": "array", "minItems": 2 }
+          },
+          "required": ["adjudicationNote"]
         }
       }],
       "additionalProperties": false
     },
-    "expected": {
+    "expected": { "$ref": "#/$defs/expectedFindings" }
+  },
+  "$defs": {
+    "expectedFindings": {
       "type": "object",
       "properties": {
         "requirements": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "minLength": 1 }, "summary": { "type": "string", "minLength": 1 }, "evidence": { "type": "string", "minLength": 1 } }, "required": ["id", "summary", "evidence"], "additionalProperties": false } },
         "missingQuestions": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "minLength": 1 }, "question": { "type": "string", "minLength": 1 }, "reason": { "type": "string", "minLength": 1 } }, "required": ["id", "question", "reason"], "additionalProperties": false } },
-        "capabilityJudgments": { "type": "array", "items": { "type": "object", "properties": { "capability": { "type": "string", "minLength": 1 }, "label": { "enum": ["supported", "unsupported", "unknown"] } }, "required": ["capability", "label"], "additionalProperties": false } }
+        "capabilityJudgments": { "type": "array", "items": { "type": "object", "properties": { "capability": { "type": "string", "minLength": 1 }, "label": { "enum": ["supported", "unsupported", "unknown"] } }, "required": ["capability", "label"], "additionalProperties": false } },
+        "risks": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string", "minLength": 1 }, "summary": { "type": "string", "minLength": 1 }, "evidence": { "type": "string", "minLength": 1 }, "rationale": { "type": "string", "minLength": 1 }, "severity": { "enum": ["low", "medium", "high"] } }, "required": ["id", "summary", "evidence", "rationale", "severity"], "additionalProperties": false } }
       },
-      "required": ["requirements", "missingQuestions", "capabilityJudgments"],
+      "required": ["requirements", "missingQuestions", "capabilityJudgments", "risks"],
       "additionalProperties": false
     }
   },
-  "required": ["schemaVersion", "caseId", "domain", "cohort", "provenance", "brief", "approval", "expected"],
+  "required": ["schemaVersion", "caseId", "domain", "cohort", "inclusionRationale", "exclusions", "provenance", "brief", "approval", "expected"],
   "additionalProperties": false
 }

@@ -1,10 +1,10 @@
 # Client scoping and delivery evaluation
 
-This folder contains repeatable, local evaluation tooling. No client brief is included. The candidate scoping examples in `scoping-candidates.jsonl` are fictional and remain `draft`; they are not ground truth and the evaluator refuses to score them until a named human reviewer approves each case.
+This folder contains repeatable, local evaluation tooling. No client brief is included. The candidate scoping examples in `scoping-candidates.jsonl` are authored, fictional review drafts; they are not ground truth and the evaluator refuses to score them until a named human reviewer approves each case. Their expected findings are proposals for reviewer inspection, not reviewer-approved labels.
 
 ## Scoping set
 
-Use the rubric in `scoping-rubric.md`. Two distinct reviewers independently label each case. They record source-supported requirements, exact evidence passages, missing questions, and capability-fit labels. Resolve disagreements with a short adjudication note and preserve both original reviews. Approval records reviewer ID, timestamp, rubric version, and provenance. Keep personal or client material out of this repository unless the owner has consented to its use.
+Use the rubric in `scoping-rubric.md`. Two distinct reviewers independently label each case. They record source-supported requirements, exact evidence passages, missing questions, source-grounded risks, and capability-fit labels. Resolve disagreements with a short adjudication note and preserve both complete original labels in `approval.reviewRecords`. Approval records reviewer IDs, review timestamps, approver, approval timestamp, rubric version, and provenance. Keep personal or client material out of this repository unless the owner has consented to its use.
 
 ### Inclusion criteria
 
@@ -14,7 +14,9 @@ Use the rubric in `scoping-rubric.md`. Two distinct reviewers independently labe
 - Use fictional examples or client material with documented consent. Remove names, contact details, credentials, and other unnecessary identifying details before adding a case.
 - Exclude duplicate or near-duplicate briefs, incomplete source extracts, cases with unresolved consent, and any material derived from the delivery holdout.
 
-An approved case requires two distinct independent reviewer IDs, an attributable approval, a UTC timestamp, and a rubric version. The schema and evaluator enforce distinct reviewers; they do not replace human review or adjudication.
+An approved case requires two distinct independent reviewer IDs, both original review records, an attributable approval, a UTC timestamp, and a rubric version. The schema and evaluator enforce distinct reviewers and retained review records; they do not replace human review or adjudication.
+
+The scoping report includes evidence support, requirement coverage, missing-question precision/recall, risk precision/recall, unsupported-capability false-positive rate, observed reviewer corrections, and observed review time, with denominators and domain breakdowns. Risk matching uses stable reviewer-approved risk IDs just like missing-question matching.
 
 Run:
 
@@ -22,7 +24,7 @@ Run:
 python evaluation/evaluate_scoping.py --dataset evaluation/scoping-candidates.jsonl --predictions path/to/predictions.jsonl
 ```
 
-Prediction rows are keyed by `caseId` and include `requirements` (`id`, `evidence`), `coveredExpectedRequirementIds`, `predictedMissingQuestionCount`, `matchedMissingQuestionIds`, `capabilityJudgments` (`capability`, `judgment`), `reviewerCorrections`, and `minutesToReviewableScope`. A reviewer must map generated requirements and questions to stable expected IDs before scoring. The runner checks evidence quotes directly against the brief. Metrics report numerators, denominators, and counts overall and by domain. Requirement coverage and missing-question agreement use reviewer-approved expected labels; capability false positives use expected `unsupported` labels.
+Prediction rows are keyed by `caseId` and include `requirements` (`id`, `evidence`), `coveredExpectedRequirementIds`, `predictedMissingQuestionCount`, `matchedMissingQuestionIds`, `predictedRiskCount`, `matchedRiskIds`, `capabilityJudgments` (`capability`, `judgment`), `reviewerCorrections`, and `minutesToReviewableScope`. A reviewer must map generated requirements, questions, and risks to stable expected IDs before scoring. The runner checks requirement evidence quotes directly against the brief. Metrics report numerators, denominators, and counts overall and by domain. Requirement coverage, missing-question agreement, and risk agreement use reviewer-approved expected labels; capability false positives use expected `unsupported` labels.
 
 ## Delivery holdout
 
