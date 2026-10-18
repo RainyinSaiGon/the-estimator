@@ -850,82 +850,6 @@
         ]
       }
     },
-    "/api/v1/records/migrate-owner": {
-      "servers": [
-        {
-          "url": "http://127.0.0.1:3000",
-          "description": "Next.js BFF on the default local address"
-        }
-      ],
-      "post": {
-        "operationId": "migrateLegacyPrivateWorkspace",
-        "summary": "Move a previous provider-owned workspace to the first-party account",
-        "x-internal-service-scope": "private-records:migrate",
-        "description": "Requires active first-party and previous-provider sessions. It never matches by email. Ownership changes and any required record re-encryption are atomic.",
-        "responses": {
-          "200": {
-            "description": "The migration completed or no previous workspace was found.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/OwnerMigrationResult"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "Both identity sessions are required.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "403": {
-            "description": "The same-origin request check failed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "A previous encrypted record could not be authenticated; no ownership changes were committed.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          },
-          "503": {
-            "description": "Identity or record storage is unavailable.",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BFFError"
-                }
-              }
-            }
-          }
-        },
-        "security": [
-          {
-            "identitySession": [],
-            "nextAuthSession": []
-          },
-          {
-            "identitySession": [],
-            "secureNextAuthSession": []
-          }
-        ]
-      }
-    },
     "/v1/records/status": {
       "servers": [
         {
@@ -2442,9 +2366,6 @@
           "identityConfigured": {
             "type": "boolean"
           },
-          "legacyMigrationAvailable": {
-            "type": "boolean"
-          },
           "recordsEnabled": {
             "type": "boolean"
           },
@@ -2459,30 +2380,8 @@
         },
         "required": [
           "identityConfigured",
-          "legacyMigrationAvailable",
           "recordsEnabled",
           "retentionDays",
-          "message"
-        ],
-        "additionalProperties": false
-      },
-      "OwnerMigrationResult": {
-        "type": "object",
-        "properties": {
-          "migrated": {
-            "type": "boolean"
-          },
-          "recordCount": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "message": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "migrated",
-          "recordCount",
           "message"
         ],
         "additionalProperties": false
@@ -2771,23 +2670,11 @@
         "name": "estimator_session",
         "description": "HttpOnly first-party session cookie; Secure is set for HTTPS requests."
       },
-      "nextAuthSession": {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": "next-auth.session-token",
-        "description": "Temporary legacy OIDC session cookie used only for explicit workspace migration."
-      },
       "serviceToken": {
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
         "description": "Short-lived BFF-to-Go HS256 token. The protected header includes a key ID for rotation; the token carries one operation-specific private-records scope and is never issued to browser code."
-      },
-      "secureNextAuthSession": {
-        "type": "apiKey",
-        "in": "cookie",
-        "name": "__Secure-next-auth.session-token",
-        "description": "HTTPS temporary legacy OIDC session cookie used only for explicit workspace migration."
       }
     }
   }

@@ -29,7 +29,7 @@ Email verification and password recovery are deliberately unavailable. There is 
 
 ## Key handling and rotation
 
-- `SERVICE_TOKEN_SECRET` is shared only between the BFF and estimator service. Tokens expire after 60 seconds, include `kid`, audience, issuer, `jti`, and exactly one private-record operation scope (`read`, `create`, `update`, `delete`, or `migrate`). During rotation, the Go service accepts the active key plus up to eight previous key IDs through `SERVICE_TOKEN_VERIFICATION_KEYS`; retain old verification entries for at least two minutes after both services use the new key. Keep `legacy` available during the first rotation for already-issued tokens without a key ID.
+- `SERVICE_TOKEN_SECRET` is shared only between the BFF and estimator service. Tokens expire after 60 seconds, include `kid`, audience, issuer, `jti`, and exactly one private-record operation scope (`read`, `create`, `update`, or `delete`). During rotation, the Go service accepts the active key plus up to eight previous key IDs through `SERVICE_TOKEN_VERIFICATION_KEYS`; retain old verification entries for at least two minutes after both services use the new key. Keep `legacy` available during the first rotation for already-issued tokens without a key ID.
 - `IDENTITY_BFF_SHARED_SECRET` is separate from every other secret. Rotate it as a coordinated BFF/identity deployment; the prototype has no overlapping-key mechanism for it.
 - `CLIENT_CONTENT_KEY` must remain available to decrypt saved records. Rotation requires a reviewed and verified re-encryption migration before old key material can be removed.
 - `IDENTITY_INDEX_KEY` must remain stable while owner mappings exist. Rotation requires a reviewed index rebuild that preserves ownership.
@@ -39,7 +39,7 @@ Email verification and password recovery are deliberately unavailable. There is 
 
 Private records expire after 90 days by default (configurable from 1 to 3650 days); expired ciphertext is excluded immediately and cleanup runs every six hours. Deletion is owner-scoped. Identity account and session cleanup/retention still needs a separate operational policy before public use.
 
-Legacy workspace migration requires an active first-party session and a verified session from the previous OIDC provider. It does not match by email and re-encrypts records transactionally when account IDs differ. Keep the legacy callback and configuration until each affected owner confirms their records; missing legacy keys mean migration cannot be claimed complete. The identity service is local preview code: do not cut over the hosted Site or delete the legacy migration path until migration, rollback, and independent security review gates pass.
+The temporary OIDC compatibility and workspace-migration path has been removed from the local preview. On 2026-10-18, the owner explicitly chose deletion of the sole old local encrypted record because its former provider configuration and encryption keys were unavailable. No hosted Site or D1 data was changed. The first-party identity service remains local preview code; this cleanup does not authorize a hosted cutover, account migration, or production use.
 
 ## Production gates
 

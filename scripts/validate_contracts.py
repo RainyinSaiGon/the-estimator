@@ -196,9 +196,6 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
         operation = paths.get(path, {}).get(method)
         if not isinstance(operation, dict) or operation.get("x-required-service-scope") != scope:
             raise ValueError(f"{method.upper()} {path} must declare service scope {scope!r}.")
-    migration = paths.get("/api/v1/records/migrate-owner", {}).get("post")
-    if not isinstance(migration, dict) or migration.get("x-internal-service-scope") != "private-records:migrate":
-        raise ValueError("Legacy workspace migration must declare the private-records:migrate service scope.")
 
 
 def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:

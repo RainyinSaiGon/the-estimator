@@ -55,7 +55,7 @@ type PrivateRecordSnapshot = {
   estimate: Estimate;
   deliveryOutcome: null;
 };
-type PrivateRecordStatus = { identityConfigured: boolean; legacyMigrationAvailable?: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
+type PrivateRecordStatus = { identityConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
 
 const supportedFiles = ".pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,.eml";
 
@@ -102,7 +102,6 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [recordsSignedIn, setRecordsSignedIn] = useState<boolean | null>(null);
   const [recordsMessage, setRecordsMessage] = useState("");
   const [recordAction, setRecordAction] = useState<string | null>(null);
-  const [needsLegacySignIn, setNeedsLegacySignIn] = useState(false);
   const [originalFileDownload, setOriginalFileDownload] = useState<{ name: string; url: string } | null>(null);
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
 
@@ -147,27 +146,6 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       setRecordsMessage("Saved estimates could not be loaded. Try again in a moment.");
     }
   }, []);
-
-  async function migrateLegacyWorkspace() {
-    setRecordAction("migrate");
-    setRecordsMessage("");
-    setNeedsLegacySignIn(false);
-    try {
-      const response = await fetch("/api/v1/records/migrate-owner", { method: "POST" });
-      const result = await response.json() as { error?: string; message?: string };
-      if (!response.ok) {
-        setNeedsLegacySignIn(response.status === 401);
-        setRecordsMessage(result.error ?? "The previous workspace could not be moved.");
-        return;
-      }
-      await refreshSavedRecords();
-      setRecordsMessage(result.message ?? "The previous workspace was moved.");
-    } catch {
-      setRecordsMessage("Workspace migration is temporarily unavailable.");
-    } finally {
-      setRecordAction(null);
-    }
-  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => { void refreshSavedRecords(); }, 0);
@@ -471,7 +449,6 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
 
     <section className="border-t border-[var(--line)] py-8">
       <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut()} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
-      {recordsSignedIn === true && recordStatus?.legacyMigrationAvailable && <div className="mt-4 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5"><h3 className="text-sm font-semibold">Move a previous private workspace</h3><p className="mt-1 max-w-3xl text-xs leading-5 text-[var(--muted)]">This links accounts only after you sign in to both. It does not compare email addresses. Existing encrypted records are re-encrypted for this account inside one transaction.</p><div className="mt-3 flex flex-wrap items-center gap-3"><button type="button" onClick={() => void migrateLegacyWorkspace()} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] bg-white px-4 py-2 text-xs font-medium disabled:opacity-50">{recordAction === "migrate" ? "Moving workspace…" : "Move previous workspace"}</button>{needsLegacySignIn && <Link href="/api/auth/signin/oidc?callbackUrl=%2Festimate" className="text-xs underline underline-offset-4">Connect previous sign-in</Link>}</div></div>}
       {!recordStatus?.recordsEnabled ? <p className="mt-3 text-sm text-[var(--muted)]">{recordStatus?.message ?? "Checking configuration…"}</p> : recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-[var(--line)] p-5"><p className="text-sm text-[var(--muted)]">Sign in to view estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : savedRecords.length === 0 ? <p className="mt-3 text-sm text-[var(--muted)]">{recordsSignedIn === true ? "No saved estimates yet." : "Sign in after private storage is configured to access saved estimates."}</p> : <ul className="mt-4 grid gap-3 md:grid-cols-2">{savedRecords.map((record) => <li key={record.id} className="flex items-center justify-between gap-4 rounded-2xl border border-[var(--line)] p-4"><div className="min-w-0"><p className="truncate text-sm font-medium">{record.title}</p><p className="mt-1 text-xs text-[var(--muted)]">Saved {new Date(record.createdAt).toLocaleDateString()} · expires {new Date(record.expiresAt).toLocaleDateString()}</p></div><div className="flex shrink-0 items-center gap-2"><button type="button" onClick={() => openPrivateRecord(record.id)} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-3 py-2 text-xs font-medium disabled:opacity-50">{recordAction === record.id ? "Opening…" : "Open"}</button><button type="button" onClick={() => deletePrivateRecord(record.id)} disabled={recordAction !== null} aria-label={`Delete ${record.title}`} className="rounded-full px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">Delete</button></div></li>)}</ul>}
       {recordsMessage && !estimate && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{recordsMessage}</p>}
     </section>

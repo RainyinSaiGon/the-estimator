@@ -17,7 +17,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -41,9 +40,6 @@ type recordStore struct {
 type recordPrincipal struct {
 	issuer         string
 	subject        string
-	legacyIssuer   string
-	legacySubject  string
-	identitySource string
 }
 
 type recordPayload struct {
@@ -201,141 +197,6 @@ func (store *recordStore) ready(parent context.Context) bool {
 	return store.pool.Ping(ctx) == nil
 }
 
-func (store *recordStore) handleOwnerMigration(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	if store == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Private records are not configured."})
-		return
-	}
-	principal, ok := store.authorize(w, r)
-	if !ok {
-		return
-	}
-	if principal.identitySource != "first-party-v1" || principal.legacyIssuer == "" || principal.legacySubject == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Both the new account and previous sign-in session are required."})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	tx, err := store.pool.Begin(ctx)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Workspace migration could not start."})
-		return
-	}
-	defer func() { _ = tx.Rollback(context.Background()) }()
-
-	legacyOwnerKey := store.ownerLookupKey(recordPrincipal{issuer: principal.legacyIssuer, subject: principal.legacySubject})
-	newOwnerKey := store.ownerLookupKey(principal)
-	var legacyAccountID string
-	err = tx.QueryRow(ctx, `SELECT id::text FROM estimator_accounts WHERE owner_key = $1 FOR UPDATE`, legacyOwnerKey).Scan(&legacyAccountID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if commitErr := tx.Commit(ctx); commitErr != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Workspace migration could not finish."})
-			return
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"migrated": false, "recordCount": 0, "message": "No previous private workspace was found for the signed-in provider account."})
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous workspace could not be checked."})
-		return
-	}
-
-	var newAccountID string
-	err = tx.QueryRow(ctx, `SELECT id::text FROM estimator_accounts WHERE owner_key = $1 FOR UPDATE`, newOwnerKey).Scan(&newAccountID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		var recordCount int
-		if err = tx.QueryRow(ctx, `SELECT count(*) FROM estimator_records WHERE account_id = $1`, legacyAccountID).Scan(&recordCount); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous workspace could not be checked."})
-			return
-		}
-		if _, err = tx.Exec(ctx, `UPDATE estimator_accounts SET owner_key = $1 WHERE id = $2 AND owner_key = $3`, newOwnerKey, legacyAccountID, legacyOwnerKey); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "Workspace ownership changed during migration. Try again; no records were moved."})
-			return
-		}
-		if err = tx.Commit(ctx); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Workspace migration could not finish."})
-			return
-		}
-		slog.Info("private_record_owner_migration_completed", "record_count", recordCount)
-		writeJSON(w, http.StatusOK, map[string]any{"migrated": true, "recordCount": recordCount, "message": "The previous workspace is now owned by this first-party account."})
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The new workspace could not be checked."})
-		return
-	}
-	if legacyAccountID == newAccountID {
-		writeJSON(w, http.StatusConflict, map[string]string{"error": "The previous and new workspace identities are already the same."})
-		return
-	}
-
-	type encryptedRecord struct {
-		id, titleAccountID              string
-		titleNonce, titleCiphertext     []byte
-		contentNonce, contentCiphertext []byte
-	}
-	rows, err := tx.Query(ctx, `SELECT id::text, account_id::text, title_nonce, title_ciphertext, content_nonce, content_ciphertext FROM estimator_records WHERE account_id = $1 ORDER BY id FOR UPDATE`, legacyAccountID)
-	if err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous records could not be read."})
-		return
-	}
-	records := make([]encryptedRecord, 0)
-	for rows.Next() {
-		var item encryptedRecord
-		if err = rows.Scan(&item.id, &item.titleAccountID, &item.titleNonce, &item.titleCiphertext, &item.contentNonce, &item.contentCiphertext); err != nil {
-			rows.Close()
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous records could not be read."})
-			return
-		}
-		records = append(records, item)
-	}
-	if err = rows.Err(); err != nil {
-		rows.Close()
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous records could not be read."})
-		return
-	}
-	rows.Close()
-
-	for _, item := range records {
-		title, decryptErr := store.decryptField(item.titleAccountID, item.id, "title", item.titleNonce, item.titleCiphertext)
-		if decryptErr != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "A previous record could not be authenticated; no records were moved."})
-			return
-		}
-		content, decryptErr := store.decryptField(item.titleAccountID, item.id, "payload", item.contentNonce, item.contentCiphertext)
-		if decryptErr != nil {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "A previous record could not be authenticated; no records were moved."})
-			return
-		}
-		titleNonce, titleCiphertext, encryptErr := store.encryptField(newAccountID, item.id, "title", title)
-		if encryptErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The previous records could not be protected for the new workspace."})
-			return
-		}
-		contentNonce, contentCiphertext, encryptErr := store.encryptField(newAccountID, item.id, "payload", content)
-		if encryptErr != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The previous records could not be protected for the new workspace."})
-			return
-		}
-		if _, err = tx.Exec(ctx, `UPDATE estimator_records SET account_id = $1, title_nonce = $2, title_ciphertext = $3, content_nonce = $4, content_ciphertext = $5 WHERE id = $6 AND account_id = $7`, newAccountID, titleNonce, titleCiphertext, contentNonce, contentCiphertext, item.id, legacyAccountID); err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous records could not be moved."})
-			return
-		}
-	}
-	if _, err = tx.Exec(ctx, `DELETE FROM estimator_accounts WHERE id = $1 AND owner_key = $2`, legacyAccountID, legacyOwnerKey); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "The previous workspace could not be closed."})
-		return
-	}
-	if err = tx.Commit(ctx); err != nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Workspace migration could not finish."})
-		return
-	}
-	slog.Info("private_record_owner_migration_completed", "record_count", len(records))
-	writeJSON(w, http.StatusOK, map[string]any{"migrated": true, "recordCount": len(records), "message": "The previous private workspace was moved to this first-party account."})
-}
-
 func (store *recordStore) handleRecords(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	if store == nil {
@@ -448,9 +309,6 @@ func verifyServiceToken(token string, keys map[string][]byte, requiredScope stri
 	subject, _ := claims["sub"].(string)
 	identityAuthority, _ := claims["identity_authority"].(string)
 	scope, _ := claims["scope"].(string)
-	identityIssuer, _ := claims["oidc_issuer"].(string)
-	legacyIssuer, _ := claims["legacy_oidc_issuer"].(string)
-	legacySubject, _ := claims["legacy_oidc_subject"].(string)
 	jti, _ := claims["jti"].(string)
 	audienceOK := false
 	switch value := claims["aud"].(type) {
@@ -475,40 +333,13 @@ func verifyServiceToken(token string, keys map[string][]byte, requiredScope stri
 		return recordPrincipal{}, errors.New("invalid token")
 	}
 
-	principal := recordPrincipal{subject: subject}
-	switch identityAuthority {
-	case "first-party-v1":
-		if !isUUID(subject) || identityIssuer != "" {
-			return recordPrincipal{}, errors.New("invalid token")
-		}
-		principal.issuer = identityAuthority
-		principal.identitySource = identityAuthority
-	case "": // Compatibility with signed legacy OIDC principal tokens during explicit migration.
-		if !validOIDCIssuer(identityIssuer) {
-			return recordPrincipal{}, errors.New("invalid token")
-		}
-		principal.issuer = identityIssuer
-		principal.identitySource = "oidc"
-	default:
+	if identityAuthority != "first-party-v1" || !isUUID(subject) {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
-	if legacyIssuer != "" || legacySubject != "" {
-		if principal.identitySource != "first-party-v1" || !validOIDCIssuer(legacyIssuer) || legacySubject == "" || len(legacySubject) > 512 {
-			return recordPrincipal{}, errors.New("invalid token")
-		}
-		principal.legacyIssuer = legacyIssuer
-		principal.legacySubject = legacySubject
-	}
-	return principal, nil
+	return recordPrincipal{issuer: identityAuthority, subject: subject}, nil
 }
 
 func requiredRecordScope(method, path string) string {
-	if path == "/v1/records/migrate-owner" {
-		if method == http.MethodPost {
-			return "private-records:migrate"
-		}
-		return ""
-	}
 	switch method {
 	case http.MethodGet:
 		if path == "/v1/records" || strings.HasPrefix(path, "/v1/records/") {
@@ -579,14 +410,6 @@ func numericClaim(value any) (int64, bool) {
 	}
 	parsed, err := number.Int64()
 	return parsed, err == nil
-}
-
-func validOIDCIssuer(value string) bool {
-	parsed, err := url.ParseRequestURI(value)
-	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
-		return false
-	}
-	return parsed.Scheme == "https" || (parsed.Scheme == "http" && (parsed.Hostname() == "localhost" || parsed.Hostname() == "127.0.0.1"))
 }
 
 func (store *recordStore) listRecords(w http.ResponseWriter, r *http.Request, principal recordPrincipal) {

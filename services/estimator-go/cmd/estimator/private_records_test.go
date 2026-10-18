@@ -52,7 +52,7 @@ func TestVerifyServiceTokenUsesKeyIDAndOperationScope(t *testing.T) {
 			if err != nil {
 				t.Fatalf("verifyServiceToken() error = %v", err)
 			}
-			if principal.subject != "0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce" || principal.identitySource != "first-party-v1" {
+			if principal.subject != "0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce" || principal.issuer != "first-party-v1" {
 				t.Fatalf("unexpected principal: %#v", principal)
 			}
 		})
@@ -108,11 +108,8 @@ func TestRequiredRecordScope(t *testing.T) {
 		{http.MethodPost, "/v1/records", "private-records:create"},
 		{http.MethodDelete, "/v1/records", "private-records:delete"},
 		{http.MethodDelete, "/v1/records/0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce", "private-records:delete"},
-		{http.MethodPost, "/v1/records/migrate-owner", "private-records:migrate"},
-		{http.MethodGet, "/v1/records/migrate-owner", ""},
 		{http.MethodPut, "/v1/records", ""},
 		{http.MethodPost, "/v1/records/unknown", ""},
-		{http.MethodPost, "/v1/records/migrate-owner/extra", ""},
 	}
 	for _, test := range tests {
 		t.Run(fmt.Sprintf("%s %s", test.method, test.path), func(t *testing.T) {

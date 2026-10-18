@@ -1,8 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
-import { getToken } from "next-auth/jwt";
-import type { NextRequest } from "next/server";
-import { oidcConfiguration, oidcConfigured, privateRecordRetentionDays } from "../auth";
 import { accountForSession, identityAuthConfigured, identityRequest, sameOriginRequest } from "./identity";
 import { configuredServiceUrl, logHttpResponse, resolveRequestId } from "./operations.ts";
 
@@ -48,7 +45,6 @@ function activeServiceTokenKey() {
 }
 
 function requiredServiceScope(method: string, path: string) {
-  if (path === "/v1/records/migrate-owner") return method === "POST" ? "private-records:migrate" : null;
   if (method === "GET" && (path === "/v1/records" || path.startsWith("/v1/records/"))) return "private-records:read";
   if (method === "PATCH" && path.startsWith("/v1/records/")) return "private-records:update";
   if (method === "POST" && path === "/v1/records") return "private-records:create";
@@ -80,33 +76,6 @@ async function serviceToken(key: { keyID: string; secret: string }, claims: Reco
     .setJti(randomUUID())
     .sign(new TextEncoder().encode(key.secret));
   return `Bearer ${token}`;
-}
-
-async function migrationAuthorization(request: Request): Promise<string | Response> {
-  if (!identityAuthConfigured()) return noStore({ error: "First-party sign-in has not been configured." }, 503);
-  if (!oidcConfigured || !oidcConfiguration) return noStore({ error: "The previous sign-in provider is not configured for workspace migration." }, 503);
-  const firstParty = await accountForSession();
-  if (!firstParty) return noStore({ error: "Sign in to your new account before moving the old workspace." }, 401);
-  const key = activeServiceTokenKey();
-  if (!key) return noStore({ error: "Private records are not configured." }, 503);
-
-  let legacySession;
-  try {
-    legacySession = await getToken({ req: request as NextRequest, secret: oidcConfiguration.nextAuthSecret });
-  } catch {
-    return noStore({ error: "Sign in with the previous provider to migrate its workspace." }, 401);
-  }
-  const issuer = legacySession?.estimatorIssuer;
-  const subject = legacySession?.estimatorSubject;
-  if (issuer !== oidcConfiguration.issuer || typeof subject !== "string" || !subject.trim() || subject.length > 512) {
-    return noStore({ error: "Sign in with the previous provider to migrate its workspace." }, 401);
-  }
-
-  return serviceToken(key, {
-    identity_authority: "first-party-v1",
-    legacy_oidc_issuer: issuer,
-    legacy_oidc_subject: subject,
-  }, firstParty.account.accountId, "private-records:migrate");
 }
 
 export async function proxyPrivateRecordRequest(request: Request, servicePath: string) {
@@ -148,27 +117,6 @@ export async function proxyPrivateRecordRequest(request: Request, servicePath: s
   return logHttpResponse(request, response, requestId, startedAt);
 }
 
-export async function proxyLegacyOwnerMigration(request: Request) {
-  const requestId = resolveRequestId(request);
-  const startedAt = performance.now();
-  let response: Response;
-  try {
-    if (request.method !== "POST" || !sameOriginRequest(request) || request.headers.get("sec-fetch-site") === "cross-site") {
-      response = noStore({ error: "This workspace migration request could not be verified." }, 403);
-    } else {
-      const authorization = await migrationAuthorization(request);
-      if (authorization instanceof Response) response = authorization;
-      else {
-        const serviceUrl = configuredServiceUrl("ESTIMATOR_SERVICE_URL", "http://127.0.0.1:8002");
-        response = await forwardPrivateRecordRequest(request, serviceUrl, "/v1/records/migrate-owner", authorization, requestId);
-      }
-    }
-  } catch {
-    response = noStore({ error: "Workspace migration is temporarily unavailable." }, 503);
-  }
-  return logHttpResponse(request, response, requestId, startedAt);
-}
-
 async function forwardPrivateRecordRequest(
   request: Request,
   serviceUrl: URL,
@@ -197,14 +145,14 @@ async function forwardPrivateRecordRequest(
 export async function privateRecordStatus() {
   const retentionDays = privateRecordRetentionDays();
   if (!identityAuthConfigured()) {
-    return noStore({ identityConfigured: false, legacyMigrationAvailable: false, recordsEnabled: false, retentionDays, message: "Private saving is unavailable until the first-party identity and storage services are configured." });
+    return noStore({ identityConfigured: false, recordsEnabled: false, retentionDays, message: "Private saving is unavailable until the first-party identity and storage services are configured." });
   }
   const identityHealth = await identityRequest("/health/ready");
   if (!identityHealth?.ok) {
-    return noStore({ identityConfigured: true, legacyMigrationAvailable: oidcConfigured && oidcConfiguration !== null, recordsEnabled: false, retentionDays, message: "The identity service is not reachable." });
+    return noStore({ identityConfigured: true, recordsEnabled: false, retentionDays, message: "The identity service is not reachable." });
   }
   if (!activeServiceTokenKey()) {
-    return noStore({ identityConfigured: true, legacyMigrationAvailable: oidcConfigured, recordsEnabled: false, retentionDays, message: "Private storage is not fully configured." });
+    return noStore({ identityConfigured: true, recordsEnabled: false, retentionDays, message: "Private storage is not fully configured." });
   }
   try {
     const serviceUrl = configuredServiceUrl("ESTIMATOR_SERVICE_URL", "http://127.0.0.1:8002");
@@ -213,12 +161,16 @@ export async function privateRecordStatus() {
     const status = await response.json() as { recordsEnabled?: boolean; retentionDays?: number };
     return noStore({
       identityConfigured: true,
-      legacyMigrationAvailable: oidcConfigured && oidcConfiguration !== null,
       recordsEnabled: status.recordsEnabled === true,
       retentionDays: Number.isInteger(status.retentionDays) ? status.retentionDays : retentionDays,
       message: status.recordsEnabled === true ? "Private storage is ready." : "Private storage is not fully configured.",
     });
   } catch {
-    return noStore({ identityConfigured: true, legacyMigrationAvailable: oidcConfigured && oidcConfiguration !== null, recordsEnabled: false, retentionDays, message: "Private storage is not reachable." });
+    return noStore({ identityConfigured: true, recordsEnabled: false, retentionDays, message: "Private storage is not reachable." });
   }
+}
+
+function privateRecordRetentionDays() {
+  const configured = Number.parseInt(process.env.RECORD_RETENTION_DAYS ?? "90", 10);
+  return Number.isInteger(configured) && configured >= 1 && configured <= 3650 ? configured : 90;
 }
