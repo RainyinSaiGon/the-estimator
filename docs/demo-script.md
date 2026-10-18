@@ -32,13 +32,27 @@ Use a fictional CRM request; the example is not real client data. Start with the
 
 ## Local agent-led preview
 
-The separate Next.js/Python/Go preview is not the hosted workspace and saves no requests. Run it with Compose. To demonstrate the model path, use fictional material and provide the existing local key to the Python service with `docker compose --env-file .env.local up --build`.
+The Next.js/Python/Go preview is a separate local architecture slice, not the hosted judge workspace. Follow [README.md](../README.md#run-the-new-local-service-slice) to start it. The base Compose setup keeps requests ephemeral; [optional first-party identity and private-record services](../README.md#first-party-identity-and-private-workspaces) enable signed-in, user-scoped saves. Use fictional material throughout.
 
-1. Open `http://127.0.0.1:3000/estimate` and use **Load fictional CRM sample**.
-2. Keep **AI specialist agents** selected and click **Analyze and review**. Explain that analysis returns no estimate yet, and that request text and the optional capability profile go to OpenAI only for this choice.
-3. Inspect the extracted source and named intake, scope, delivery-risk, capability, and evidence-review steps. Check the source quotes, missing questions, and any unknown team fit.
-4. Edit a work-item title, remove a finding, and correct a quote. Confirm that unsupported quotes cannot reach the estimator. Add only verified team capabilities, then analyze again to compare the fit findings.
-5. Check the scope confirmation control and click **Confirm scope & estimate**. Show the separate estimate request, its task breakdown, assumptions, and evidence basis. Explain that the model does not generate hours.
-6. Run the same scenario with **Sample rules** and explain that it makes no provider call. Use a fictional non-integration brief to demonstrate the general-work path; its complexity bands are uncalibrated planning priors, not learned predictions.
-7. Upload a supported fictional PDF, Word, spreadsheet, slide, CSV, text, Markdown, JSON, or email file and show its extraction metadata. Scanned-only PDFs and unsupported formats are reported rather than treated as analyzed.
-8. State that the local preview is ephemeral. Do not submit confidential client content or present the preview as the authenticated private workspace.
+1. Open `http://127.0.0.1:3000/estimate` and load the fictional CRM sample. If the OpenAI provider is configured, choose **AI specialist agents** and analyze it. Otherwise, choose **Sample rules**. The sample path is deterministic and makes no AI provider call.
+2. In AI mode, explain the data flow before analyzing: the Python analysis service extracts text from an uploaded file; OpenAI receives the request text (extracted text for a file), supplied team capabilities, and the source name and file type. The uploaded file bytes are not sent to OpenAI. Only submit client material you are authorized to share with OpenAI.
+3. Inspect the extracted source and the named intake, scope, delivery-risk, capability, and evidence-review steps. Model findings are suggestions. A “Quote found in extracted text” badge means the quoted text occurs in the extracted source; it does not establish that the quote supports the requirement or that the requirement is approved.
+4. Use **Show in extracted text** on a work item. Review the highlighted passage, correct a quote or title, or remove a finding the client did not request. Add only supported team capabilities. If no exact passage is found, inspect the full extracted text and correct or remove the quote.
+5. For integration work, inspect and confirm or correct the five effort-driver inputs: sync direction, API documentation, data quality, record volume, and field mapping. Confirm the scope only after reviewing the source, evidence, and drivers. No numeric estimate is requested before this review gate.
+6. Show the integration formula table: driver-adjusted base hours, the per-package comparable count n, median actual/base ratio, shrinkage weight n/(n+4), factor, adjusted hours, and range. The demo uses fictional synthetic references; it is not a real accuracy evaluation. General-work estimates use fixed uncalibrated priors and receive no history adjustment today.
+7. Explain the variation boundary: agent extraction may vary before review; the numeric estimate is deterministic when confirmed inputs and the estimator version are the same. The LLM does not produce the hours.
+8. Switch to **Sample rules** explicitly when the provider is unavailable. If an AI request fails, show the error first; do not describe the sample run as a successful live AI result or switch modes silently.
+9. Analysis is not saved to the private workspace automatically. Saving a reviewed estimate is a separate action. In the optional private-workspace setup, sign in before saving; the snapshot is encrypted, account-scoped, and retained for the configured period. In the base setup, no private records are stored. Never use confidential client material for this demo.
+
+### Rehearsal checklist
+
+This checklist is a plan, not a record of a completed rehearsal. Mark results only after actually running the flow.
+
+- [ ] Start the selected Compose setup from a clean checkout and open the local estimate page.
+- [ ] Complete the fictional brief flow in Sample rules without provider credentials.
+- [ ] If AI is configured, complete one fictional AI run and separately demonstrate visible provider failure handling.
+- [ ] Repeat the same confirmed estimate inputs and record the estimator version and displayed numeric result.
+- [ ] If the optional private workspace is configured, save and reopen a fictional estimate, then repeat with a second account and confirm the workspaces remain isolated.
+- [ ] Record the rehearsal date, setup, outcome, and any blocked steps before claiming the walkthrough has been verified.
+
+The product has no representative recorded delivery cohort for this preview. Do not claim improved scoping speed, consistency, or real-world estimate accuracy from the synthetic demo.

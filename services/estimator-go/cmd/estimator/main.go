@@ -68,15 +68,17 @@ type History struct {
 }
 
 type Task struct {
-	Category     string   `json:"category"`
-	Label        string   `json:"label"`
-	Base         float64  `json:"base"`
-	Factor       float64  `json:"factor"`
-	Hours        float64  `json:"hours"`
-	Low          int      `json:"low"`
-	High         int      `json:"high"`
-	Observations int      `json:"observations"`
-	ReferenceIDs []string `json:"referenceIds"`
+	Category                string   `json:"category"`
+	Label                   string   `json:"label"`
+	Base                    float64  `json:"base"`
+	Factor                  float64  `json:"factor"`
+	Hours                   float64  `json:"hours"`
+	Low                     int      `json:"low"`
+	High                    int      `json:"high"`
+	Observations            int      `json:"observations"`
+	MedianActualToBaseRatio *float64 `json:"medianActualToBaseRatio"`
+	HistoryWeight           float64  `json:"historyWeight"`
+	ReferenceIDs            []string `json:"referenceIds"`
 }
 
 type Reference struct {
@@ -528,8 +530,11 @@ func estimate(req EstimateRequest) (Estimate, error) {
 		}
 		support := float64(len(ratios)) / (float64(len(ratios)) + 4)
 		factor := 1.0
+		var medianActualToBaseRatio *float64
 		if len(ratios) > 0 {
-			factor = 1 + support*(median(ratios)-1)
+			medianRatio := median(ratios)
+			medianActualToBaseRatio = &medianRatio
+			factor = 1 + support*(medianRatio-1)
 		}
 		hours := round1(bases[category] * factor)
 		spread := .4
@@ -542,7 +547,7 @@ func estimate(req EstimateRequest) (Estimate, error) {
 		for _, h := range comparables {
 			refIDs = append(refIDs, h.ID)
 		}
-		tasks = append(tasks, Task{Category: category, Label: taskNames[category], Base: round1(bases[category]), Factor: math.Round(factor*100) / 100, Hours: hours, Low: low, High: high, Observations: len(ratios), ReferenceIDs: refIDs})
+		tasks = append(tasks, Task{Category: category, Label: taskNames[category], Base: round1(bases[category]), Factor: math.Round(factor*100) / 100, Hours: hours, Low: low, High: high, Observations: len(ratios), MedianActualToBaseRatio: medianActualToBaseRatio, HistoryWeight: support, ReferenceIDs: refIDs})
 		totalHours += hours
 		totalBase += bases[category]
 		totalLow += low

@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import type { IdentityAccount } from "../../lib/identity";
 
 const sampleBrief = `Hi team,
@@ -40,9 +40,10 @@ type Estimate = {
   high: number;
   blockers: string[];
   assumptions: string[];
-  tasks: { category: string; label: string; base: number; hours: number; low: number; high: number; observations: number }[];
+  tasks: { category: string; label: string; base: number; factor?: number; hours: number; low: number; high: number; observations: number; medianActualToBaseRatio?: number | null; historyWeight?: number; referenceIds?: string[] }[];
+  baseHours?: number;
   references: { id: string; name: string; score: number; synthetic?: boolean }[];
-  provenance: { mode?: string; dataBasis?: string; historyPolicy?: string };
+  provenance: { mode?: string; dataBasis?: string; historyPolicy?: string; engineVersion?: string };
 };
 type PrivateRecordSummary = { id: string; title: string; createdAt: string; expiresAt: string };
 type PrivateRecordSnapshot = {
@@ -58,6 +59,13 @@ type PrivateRecordSnapshot = {
 type PrivateRecordStatus = { identityConfigured: boolean; recordsEnabled: boolean; retentionDays: number; message: string };
 
 const supportedFiles = ".pdf,.docx,.xlsx,.pptx,.csv,.txt,.md,.json,.eml";
+const integrationDriverFields = [
+  { key: "direction", label: "Sync direction", options: [{ value: "unknown", label: "Unknown" }, { value: "one-way", label: "One-way" }, { value: "two-way", label: "Two-way" }] },
+  { key: "api", label: "API documentation", options: [{ value: "unknown", label: "Unknown" }, { value: "documented", label: "Documented" }, { value: "custom", label: "Custom work needed" }] },
+  { key: "quality", label: "Data quality", options: [{ value: "unknown", label: "Unknown" }, { value: "clean", label: "Clean" }, { value: "mixed", label: "Mixed or incomplete" }] },
+  { key: "volume", label: "Record volume", options: [{ value: "unknown", label: "Unknown" }, { value: "small", label: "Small" }, { value: "medium", label: "Medium" }, { value: "large", label: "Large" }] },
+  { key: "mapping", label: "Field mapping", options: [{ value: "unknown", label: "Unknown" }, { value: "standard", label: "Standard" }, { value: "custom", label: "Custom rules" }] },
+] as const;
 
 function normalizedEvidence(value: string) {
   return value.normalize("NFKC").toLowerCase()
@@ -68,6 +76,20 @@ function normalizedEvidence(value: string) {
 function hasSourceEvidence(source: string, quote: string) {
   const normalizedQuote = normalizedEvidence(quote);
   return normalizedQuote.length > 0 && normalizedEvidence(source).includes(normalizedQuote);
+}
+
+type SourceRange = { start: number; end: number };
+
+function findSourceEvidenceRanges(source: string, quote: string): SourceRange[] {
+  const terms = quote.trim().split(/\s+/u).filter(Boolean);
+  if (terms.length === 0) return [];
+  const escapedTerms = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+  const matcher = new RegExp(escapedTerms.join("\\s+"), "giu");
+  const ranges: SourceRange[] = [];
+  for (const match of source.matchAll(matcher)) {
+    if (match.index !== undefined) ranges.push({ start: match.index, end: match.index + match[0].length });
+  }
+  return ranges;
 }
 
 function scopeForStorage(value: Scope): Scope {
@@ -103,6 +125,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [recordsMessage, setRecordsMessage] = useState("");
   const [recordAction, setRecordAction] = useState<string | null>(null);
   const [originalFileDownload, setOriginalFileDownload] = useState<{ name: string; url: string } | null>(null);
+  const [sourceHighlightRanges, setSourceHighlightRanges] = useState<SourceRange[]>([]);
+  const [sourceHighlightMessage, setSourceHighlightMessage] = useState("");
+  const sourceDetailsRef = useRef<HTMLDetailsElement | null>(null);
+  const firstSourceMarkRef = useRef<HTMLElement | null>(null);
   const evidenceReady = scope !== null && scope.requirements.length > 0 && scope.source.reviewText.length > 0 && scope.requirements.every((item) => hasSourceEvidence(scope.source.reviewText, item.evidence));
 
   async function signOut() {
@@ -116,6 +142,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setSuggestedScope(null);
     setEstimate(null);
     setOriginalFileDownload(null);
+    setSourceHighlightRanges([]);
+    setSourceHighlightMessage("");
     setReviewConfirmed(false);
     setError("");
   }
@@ -152,6 +180,30 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     return () => window.clearTimeout(timer);
   }, [refreshSavedRecords]);
   useEffect(() => () => { if (originalFileDownload) URL.revokeObjectURL(originalFileDownload.url); }, [originalFileDownload]);
+  useEffect(() => {
+    if (sourceHighlightRanges.length === 0) return;
+    const frame = window.requestAnimationFrame(() => {
+      const mark = firstSourceMarkRef.current;
+      if (!mark) return;
+      sourceDetailsRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      mark.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [sourceHighlightRanges]);
+
+  function showSourceEvidence(source: string, quote: string) {
+    if (sourceDetailsRef.current) {
+      sourceDetailsRef.current.open = true;
+      sourceDetailsRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
+    }
+    const ranges = findSourceEvidenceRanges(source, quote);
+    setSourceHighlightRanges(ranges);
+    setSourceHighlightMessage(ranges.length > 0
+      ? `${ranges.length} matching passage${ranges.length === 1 ? "" : "s"} highlighted. A text match does not confirm that the quote supports this work item.`
+      : hasSourceEvidence(source, quote)
+        ? "A normalized quote match was found, but an exact highlight is unavailable. Review the extracted source text."
+        : "No matching passage was found. Review the extracted source text and correct or remove this quote.");
+  }
 
   function updateRequirement(index: number, patch: Partial<Requirement>) {
     setScope((current) => current ? {
@@ -159,6 +211,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       requirements: current.requirements.map((item, itemIndex) => itemIndex === index ? { ...item, ...patch } : item),
     } : current);
     setEstimate(null);
+    setSourceHighlightRanges([]);
+    setSourceHighlightMessage("");
     setReviewConfirmed(false);
     setError("");
   }
@@ -168,6 +222,15 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       ...current,
       requirements: current.requirements.filter((_, itemIndex) => itemIndex !== index),
     } : current);
+    setEstimate(null);
+    setSourceHighlightRanges([]);
+    setSourceHighlightMessage("");
+    setReviewConfirmed(false);
+    setError("");
+  }
+
+  function updateIntegrationAnswer(key: typeof integrationDriverFields[number]["key"], value: string) {
+    setScope((current) => current ? { ...current, initialAnswers: { ...current.initialAnswers, [key]: value } } : current);
     setEstimate(null);
     setReviewConfirmed(false);
     setError("");
@@ -179,6 +242,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setError("");
     setEstimate(null);
     setOriginalFileDownload(null);
+    setSourceHighlightRanges([]);
+    setSourceHighlightMessage("");
     setReviewConfirmed(false);
     const capabilities = capabilityText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
     try {
@@ -274,6 +339,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       if (!response.ok || !result.payload) throw new Error(result.error ?? "The saved estimate could not be opened.");
       const snapshot = result.payload;
       const source = snapshot.source;
+      setSourceHighlightRanges([]);
+      setSourceHighlightMessage("");
       setSuggestedScope({ ...snapshot.suggestedScope, source });
       setScope({ ...snapshot.reviewedScope, source });
       setEstimate(snapshot.estimate);
@@ -334,7 +401,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   return <main className="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-10">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview · not saved</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
+      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
     </header>
 
     <div className="grid gap-8 py-8 lg:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)] lg:gap-10">
@@ -375,8 +442,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
             <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Only add capabilities your team has confirmed. With no profile, team fit stays unknown.</p>
           </div>
 
-          {parser === "ai" && <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950">AI mode sends the request text and capability profile to OpenAI for this analysis. This local preview does not save a workspace record; use fictional or non-sensitive material here.</p>}
-          {parser === "sample" && <p className="rounded-xl border border-[var(--line)] bg-white p-3 text-xs leading-5 text-[var(--muted)]">Sample mode uses deterministic local rules and does not call an AI provider. Its general-work ranges are uncalibrated planning priors.</p>}
+          {parser === "ai" && <div role="note" aria-label="AI data and privacy" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-semibold">What AI analysis sends</p><p className="mt-1.5">The Estimator analysis service extracts text from uploaded files. OpenAI receives the request text (extracted text for files), the team capabilities you entered, and the source name and file type. The uploaded file itself is not sent to OpenAI.</p><p className="mt-1.5">Only send client material you are authorized to share with OpenAI. The Estimator does not add analysis to your private workspace automatically. Private saving requires the optional identity and storage services and a sign-in. When enabled, a reviewed estimate you explicitly save is encrypted before storage in your account-scoped workspace and kept for {recordStatus ? `${recordStatus.retentionDays} days` : "the configured retention period"}.</p></div>}
+          {parser === "sample" && <p className="rounded-xl border border-[var(--line)] bg-white p-3 text-xs leading-5 text-[var(--muted)]">Sample mode uses deterministic local rules, makes no AI provider call, and does not save a record automatically. General-work ranges are uncalibrated planning priors.</p>}
 
           <button disabled={busy !== null || (!file && brief.trim().length < 30)} className="rounded-full bg-[var(--ink)] px-6 py-3 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">{busy === "analyze" ? "Analyzing request…" : scope ? "Analyze again" : "Analyze and review"}</button>
         </form>
@@ -395,9 +462,16 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
           <p className="mt-5 text-sm leading-6">{scope.summary}</p>
           <p className="mt-3 text-xs text-[var(--muted)]">Source: {scope.source.name} · {scope.source.type.toUpperCase()} · {scope.source.characters.toLocaleString()} extracted characters{scope.source.truncated ? " · truncated at the extraction limit" : ""}</p>
           {originalFileDownload && <p className="mt-2 text-xs"><a href={originalFileDownload.url} download={originalFileDownload.name} className="underline underline-offset-2">Download original client file</a></p>}
-          <details className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4">
+          <details ref={sourceDetailsRef} className="mt-4 rounded-xl border border-[var(--line)] bg-[var(--paper)] p-4">
             <summary className="cursor-pointer text-sm font-medium">View extracted source text</summary>
-            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap text-xs leading-5 text-[var(--muted)]">{scope.source.reviewText}</pre>
+            {sourceHighlightMessage && <p role="status" className="mt-3 text-xs leading-5 text-[var(--muted)]">{sourceHighlightMessage}</p>}
+            <pre className="mt-3 max-h-72 overflow-auto whitespace-pre-wrap text-xs leading-5 text-[var(--muted)]">{sourceHighlightRanges.length === 0 ? scope.source.reviewText : <>
+              {sourceHighlightRanges.map((range, index) => <Fragment key={`${range.start}-${range.end}`}>
+                {scope.source.reviewText.slice(index === 0 ? 0 : sourceHighlightRanges[index - 1].end, range.start)}
+                <mark ref={index === 0 ? (element) => { firstSourceMarkRef.current = element; } : undefined} tabIndex={-1} className="rounded bg-amber-200 px-1 text-[var(--ink)] outline-none ring-2 ring-amber-400">{scope.source.reviewText.slice(range.start, range.end)}</mark>
+              </Fragment>)}
+              {scope.source.reviewText.slice(sourceHighlightRanges[sourceHighlightRanges.length - 1]?.end ?? 0)}
+            </>}</pre>
           </details>
 
           <section className="mt-6 rounded-2xl bg-[var(--paper)] p-4">
@@ -406,13 +480,25 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
           </section>
 
           <section className="mt-7">
-            <div className="flex items-end justify-between gap-4"><div><h3 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Requested work & source evidence</h3><p className="mt-1 text-xs text-[var(--muted)]">Edit the titles, correct quotes, or remove work the client did not ask for.</p></div><span className="text-xs text-[var(--muted)]">{scope.requirements.length} included</span></div>
+            <div className="flex items-end justify-between gap-4"><div><h3 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Requested work & source evidence</h3><p className="mt-1 text-xs text-[var(--muted)]">Edit titles and quotes, or remove work the client did not ask for. A quote match only confirms text is present; review whether it supports the work item.</p></div><span className="text-xs text-[var(--muted)]">{scope.requirements.length} included</span></div>
             <ul className="mt-3 space-y-3">{scope.requirements.map((item, index) => <li key={`${item.id}-${index}`} className="rounded-xl border border-[var(--line)] p-4">
               <div className="flex items-start justify-between gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Work item title<input aria-label={`Work item ${index + 1} title`} value={item.title} maxLength={240} onChange={(event) => updateRequirement(index, { title: event.target.value })} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={() => removeRequirement(index)} className="mt-5 rounded-full border border-[var(--line)] px-3 py-2 text-xs text-[var(--muted)] hover:text-red-700">Remove</button></div>
-              <div className="mt-3 flex items-center justify-between gap-3"><label htmlFor={`evidence-${index}`} className="text-xs font-medium text-[var(--muted)]">Source quote</label><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${hasSourceEvidence(scope.source.reviewText, item.evidence) ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>{hasSourceEvidence(scope.source.reviewText, item.evidence) ? "Source verified" : "Needs source review"}</span></div><textarea id={`evidence-${index}`} aria-label={`Work item ${index + 1} source quote`} value={item.evidence} maxLength={1200} onChange={(event) => updateRequirement(index, { evidence: event.target.value, evidenceStatus: hasSourceEvidence(scope.source.reviewText, event.target.value) ? "verified" : "needs_review" })} rows={2} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm leading-5 text-[var(--ink)]" />
+              <div className="mt-3 flex items-center justify-between gap-3"><label htmlFor={`evidence-${index}`} className="text-xs font-medium text-[var(--muted)]">Source quote</label><span className={`rounded-full px-2.5 py-1 text-[10px] font-medium ${hasSourceEvidence(scope.source.reviewText, item.evidence) ? "bg-emerald-50 text-emerald-800" : "bg-amber-50 text-amber-900"}`}>{hasSourceEvidence(scope.source.reviewText, item.evidence) ? "Quote found in extracted text" : "No exact quote match"}</span></div><textarea id={`evidence-${index}`} aria-label={`Work item ${index + 1} source quote`} value={item.evidence} maxLength={1200} onChange={(event) => updateRequirement(index, { evidence: event.target.value, evidenceStatus: hasSourceEvidence(scope.source.reviewText, event.target.value) ? "verified" : "needs_review" })} rows={2} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm leading-5 text-[var(--ink)]" />
+              <button type="button" onClick={() => showSourceEvidence(scope.source.reviewText, item.evidence)} className="mt-2 rounded-full border border-[var(--line)] px-3 py-1.5 text-xs font-medium text-[var(--muted)] hover:text-[var(--ink)]">Show in extracted text</button>
               {scope.estimateMode === "general" && <label className="mt-3 block text-xs font-medium text-[var(--muted)]">Rough complexity band<select aria-label={`Work item ${index + 1} complexity`} value={item.complexity ?? "moderate"} onChange={(event) => updateRequirement(index, { complexity: event.target.value as Complexity })} className="mt-1 rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]"><option value="small">Small</option><option value="moderate">Moderate</option><option value="complex">Complex</option></select></label>}
             </li>)}</ul>
           </section>
+
+          {scope.estimateMode === "integration" && <section className="mt-7 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-4">
+            <h3 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Integration effort drivers</h3>
+            <p className="mt-1 text-xs leading-5 text-[var(--muted)]">These suggested answers change the base work-package hours. Confirm or correct them from the client brief before estimating.</p>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              {integrationDriverFields.map((field) => {
+                const selectedValue = field.options.find((option) => option.value === scope.initialAnswers[field.key])?.value ?? "unknown";
+                return <label key={field.key} className="text-xs font-medium text-[var(--muted)]">{field.label}<select aria-label={field.label} value={selectedValue} onChange={(event) => updateIntegrationAnswer(field.key, event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]">{field.options.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>;
+              })}
+            </div>
+          </section>}
 
           {scope.missingInformation.length > 0 && <section className="mt-7"><h3 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Questions before committing</h3><ul className="mt-3 space-y-2">{scope.missingInformation.map((item, index) => <li key={`${item.question}-${index}`} className="rounded-xl border border-amber-200 bg-amber-50 p-4"><div className="flex items-start justify-between gap-3"><p className="text-sm font-medium">{item.question}</p><span className="text-[10px] uppercase text-amber-800">{item.priority}</span></div><p className="mt-1 text-xs leading-5 text-amber-950">{item.reason}</p></li>)}</ul></section>}
 
@@ -423,7 +509,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
           {scope.qualityNotes.length > 0 && <section className="mt-6 rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-medium">Review notes</h3><ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-5 text-[var(--muted)]">{scope.qualityNotes.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
 
           <div className="mt-7 border-t border-[var(--line)] pt-5">
-            <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" checked={reviewConfirmed} onChange={(event) => { setReviewConfirmed(event.target.checked); setEstimate(null); }} className="mt-1 size-4 accent-black" /><span>I reviewed the extracted source, work items, and evidence. This scope is ready for a planning estimate.</span></label>
+            <label className="flex items-start gap-3 text-sm leading-6"><input type="checkbox" checked={reviewConfirmed} onChange={(event) => { setReviewConfirmed(event.target.checked); setEstimate(null); }} className="mt-1 size-4 accent-black" /><span>I reviewed the extracted source, whether each quote supports its work item, and the integration effort drivers when shown. This scope is ready for a planning estimate.</span></label>
             {!evidenceReady && <p role="status" className="mt-3 text-xs leading-5 text-amber-900">Correct or remove each work item marked “Needs source review” before estimating.</p>}
             <button type="button" onClick={estimateReviewedScope} disabled={busy !== null || !reviewConfirmed || !evidenceReady} className="mt-4 rounded-full bg-[var(--ink)] px-6 py-3 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">{busy === "estimate" ? "Calculating reviewed scope…" : estimate ? "Recalculate reviewed estimate" : "Confirm scope & estimate"}</button>
             {!estimate && <p className="mt-3 text-xs text-[var(--muted)]">No estimate is requested or shown before you confirm this scope.</p>}
@@ -433,10 +519,20 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
             <div className="flex flex-wrap items-end justify-between gap-3"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">03 / Planning estimate</p><h3 className="mt-2 text-4xl font-medium tracking-[-.04em]">{estimate.hours} hours</h3></div><p className="text-sm text-[var(--muted)]">Range {estimate.low}–{estimate.high} person-hours</p></div>
             <h4 className="mt-6 text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Effort breakdown</h4>
             <div className="mt-3 divide-y divide-[var(--line)] rounded-xl border border-[var(--line)] px-4">{estimate.tasks.map((task) => <div key={task.category} className="flex items-center justify-between gap-4 py-3 text-sm"><span>{task.label}<small className="ml-2 text-xs text-[var(--muted)]">base {task.base}h</small></span><span className="whitespace-nowrap font-medium">{task.low}–{task.high}h</span></div>)}</div>
+            {scope.estimateMode === "integration" ? <section className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5">
+              <h4 className="text-sm font-semibold">How the integration estimate is calculated</h4>
+              <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Confirmed integration drivers set each work package&apos;s base hours. The history adjustment is applied per package: base × [1 + n/(n+4) × (median reference actual/frozen-base ratio − 1)]. n counts only references with similarity ≥ 0.45 and both a baseline and actual for that package; ratios are bounded to 0.35–3.00. The service uses full precision before rounding displayed hours.</p>
+              <div className="mt-4 grid gap-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+                <div className="rounded-xl border border-[var(--line)] bg-white p-4"><h5 className="text-xs font-medium uppercase tracking-[.14em] text-[var(--muted)]">Confirmed inputs</h5><ul className="mt-2 space-y-1 text-xs">{integrationDriverFields.map(({ key, label, options }) => <li key={key} className="flex justify-between gap-3"><span className="text-[var(--muted)]">{label}</span><span className="font-medium">{options.find((option) => option.value === scope.initialAnswers[key])?.label ?? "Unknown"}</span></li>)}</ul><p className="mt-3 text-xs leading-5 text-[var(--muted)]">These answers set the base work-package hours before delivery history is considered.</p></div>
+                <div className="overflow-x-auto rounded-xl border border-[var(--line)] bg-white"><table className="w-full min-w-[650px] text-left text-xs"><caption className="sr-only">Per-package base and history adjustment</caption><thead className="border-b border-[var(--line)] bg-[var(--paper)] text-[var(--muted)]"><tr><th className="px-3 py-2 font-medium">Work package</th><th className="px-3 py-2 font-medium">Base h</th><th className="px-3 py-2 font-medium">n</th><th className="px-3 py-2 font-medium">Median ratio</th><th className="px-3 py-2 font-medium">Weight</th><th className="px-3 py-2 font-medium">Factor</th><th className="px-3 py-2 font-medium">Adjusted h</th></tr></thead><tbody className="divide-y divide-[var(--line)]">{estimate.tasks.map((task) => <tr key={task.category}><th scope="row" className="px-3 py-2 font-medium">{task.label}</th><td className="px-3 py-2">{task.base.toFixed(1)}</td><td className="px-3 py-2">{task.observations}</td><td className="px-3 py-2">{typeof task.medianActualToBaseRatio === "number" ? task.medianActualToBaseRatio.toFixed(2) : task.observations === 0 ? "—" : "Not stored"}</td><td className="px-3 py-2">{typeof task.historyWeight === "number" ? task.historyWeight.toFixed(2) : (task.observations / (task.observations + 4)).toFixed(2)}</td><td className="px-3 py-2">{typeof task.factor === "number" ? `${task.factor.toFixed(2)}×` : "—"}</td><td className="px-3 py-2 font-medium">{task.hours.toFixed(1)}</td></tr>)}</tbody></table></div>
+              </div>
+              <p className="mt-3 text-xs leading-5 text-[var(--muted)]">Base total {(estimate.baseHours ?? estimate.tasks.reduce((total, task) => total + task.base, 0)).toFixed(1)}h · adjusted total {estimate.hours.toFixed(1)}h. The range widens for unknown inputs, varied comparable ratios, or fewer than three observations; it is a planning range, not a statistical confidence interval. {estimate.provenance.historyPolicy === "demo" ? "This preview uses fictional demonstration history; it is not evidence of real delivery accuracy." : estimate.provenance.historyPolicy === "recorded" ? "A package with n = 0 has no eligible comparison and keeps a history factor of 1.00." : "This saved estimate does not include history-policy provenance."}</p>
+              {estimate.references.length > 0 && <div className="mt-4 border-t border-[var(--line)] pt-3"><h5 className="text-xs font-medium">Similar reference cohort (up to three shown)</h5><ul className="mt-2 flex flex-wrap gap-2">{estimate.references.map((reference) => <li key={reference.id} className="rounded-full border border-[var(--line)] bg-white px-3 py-1.5 text-[10px] text-[var(--muted)]">{reference.synthetic ? "Synthetic demonstration" : "Recorded delivery"} · {Math.round(reference.score * 100)}% similar</li>)}</ul><p className="mt-2 text-xs leading-5 text-[var(--muted)]">The per-package n above counts only rows with usable actual-to-baseline ratios; the displayed similar examples may not all contribute to every package.</p></div>}
+            </section> : <section className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5"><h4 className="text-sm font-semibold">How the general-work estimate is calculated</h4><p className="mt-2 text-xs leading-5 text-[var(--muted)]">General work uses fixed, uncalibrated complexity priors. Delivery history does not adjust these hours today. AI extraction can vary before review; with the same confirmed work packages and estimator version ({estimate.provenance.engineVersion ?? "version not reported"}), the numeric result is deterministic.</p></section>}
+            {scope.estimateMode === "integration" && <p className="mt-4 text-xs leading-5 text-[var(--muted)]">AI extraction may vary before review. Once the reviewed inputs and estimator version ({estimate.provenance.engineVersion ?? "version not reported"}) are fixed, the numeric estimate is deterministic. This is a planning aid, not a delivery commitment.</p>}
             {estimate.assumptions.length > 0 && <section className="mt-6"><h4 className="text-xs font-medium uppercase tracking-[.16em] text-[var(--muted)]">Estimate basis & assumptions</h4><ul className="mt-2 list-inside list-disc space-y-1 text-xs leading-5 text-[var(--muted)]">{estimate.assumptions.map((item, index) => <li key={`${item}-${index}`}>{item}</li>)}</ul></section>}
             {estimate.blockers.length > 0 && <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50 p-4"><h4 className="text-sm font-medium">Questions before committing</h4><ul className="mt-2 list-inside list-disc space-y-1 text-sm leading-6 text-amber-950">{estimate.blockers.map((item) => <li key={item}>{item}</li>)}</ul></div>}
-            {estimate.references.length > 0 && <p className="mt-4 text-xs text-[var(--muted)]">{estimate.references.length} comparable reference(s); {estimate.references.every((item) => item.synthetic) ? "all are synthetic demonstrations" : "recorded and synthetic references are shown separately in provenance"}.</p>}
-            <p className="mt-5 text-xs leading-5 text-[var(--muted)]">{scope.estimateMode === "general" ? "General-work bands are uncalibrated planning priors." : "Demonstration references are fictional."} This is a planning aid, not a delivery commitment. Nothing is stored unless you explicitly save it to a configured private workspace.</p>
+            <p className="mt-5 text-xs leading-5 text-[var(--muted)]">Nothing is stored to your private workspace unless you explicitly save a reviewed estimate.</p>
             <div className="mt-6 rounded-2xl border border-[var(--line)] bg-[var(--paper)] p-5">
               <div className="flex flex-wrap items-start justify-between gap-4"><div><h4 className="text-sm font-semibold">Save a reviewed estimate privately</h4><p className="mt-1 max-w-xl text-xs leading-5 text-[var(--muted)]">Your original suggestion, reviewed scope, source, and confirmed estimate are encrypted before storage. Saving creates a new immutable snapshot; it never overwrites an earlier one. Records expire after {recordStatus?.retentionDays ?? 90} days.</p></div><span className="rounded-full border border-[var(--line)] bg-white px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">Explicit save</span></div>
               {recordStatus?.recordsEnabled ? recordsSignedIn === false ? <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-white p-4"><p className="text-sm text-[var(--muted)]">Sign in to save or open estimates in your private workspace.</p><Link href="/sign-in?returnTo=%2Festimate" className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white">Sign in</Link></div> : <div className="mt-4 flex flex-wrap items-end gap-3"><label className="min-w-0 flex-1 text-xs font-medium text-[var(--muted)]">Estimate name<input aria-label="Private estimate name" value={recordTitle} maxLength={200} onChange={(event) => setRecordTitle(event.target.value)} className="mt-1 w-full rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" /></label><button type="button" onClick={savePrivateEstimate} disabled={busy !== null || !recordTitle.trim() || !suggestedScope} className="rounded-full bg-[var(--ink)] px-5 py-2.5 text-xs font-medium text-white disabled:opacity-50">{busy === "save" ? "Saving privately…" : "Save private estimate"}</button></div> : <p className="mt-4 rounded-xl border border-[var(--line)] bg-white p-4 text-xs leading-5 text-[var(--muted)]">{recordStatus?.message ?? "Checking private storage configuration…"} This preview remains ephemeral until first-party identity and encrypted storage are configured.</p>}
