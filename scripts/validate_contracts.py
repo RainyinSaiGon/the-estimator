@@ -23,6 +23,9 @@ from openapi_spec_validator import validate_spec
 ROOT = Path(__file__).resolve().parents[1]
 SPEC_PATH = ROOT / "contracts" / "v1" / "openapi.json"
 IDENTITY_SPEC_PATH = ROOT / "contracts" / "v1" / "identity-openapi.json"
+SCOPING_DATASET_SCHEMA_PATH = ROOT / "evaluation" / "scoping-dataset.schema.json"
+SCOPING_CANDIDATES_PATH = ROOT / "evaluation" / "scoping-candidates.jsonl"
+LEARNING_POLICY_SCHEMA_PATH = ROOT / "docs" / "learning-policy-proposal.schema.json"
 ROUTE_CHECK_PATH = ROOT / "scripts" / "check_bff_route.mjs"
 WEB_HEALTH_CHECK_PATH = ROOT / "scripts" / "check_web_health.mjs"
 BRIEF_DIR = ROOT / "services" / "brief-intelligence"
@@ -216,6 +219,9 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
         ("/v1/records/{recordID}", "get"): "private-records:read",
         ("/v1/records/{recordID}", "patch"): "private-records:update",
         ("/v1/records/{recordID}", "delete"): "private-records:delete",
+        ("/v1/records/{recordID}/delivery", "post"): "private-records:update",
+        ("/v1/records/{recordID}/delivery/review", "get"): "private-records:read",
+        ("/v1/records/{recordID}/delivery/review", "patch"): "private-records:update",
     }
     paths = spec["paths"]
     for (path, method), scope in expected.items():
@@ -235,6 +241,89 @@ def validate_service_token_scopes(spec: dict[str, Any]) -> None:
             or "401" not in operation.get("responses", {})
         ):
             raise ValueError(f"POST {path} must declare its internal service-token scope and 401 response.")
+
+
+def validate_record_contract_compatibility(spec: dict[str, Any]) -> None:
+    estimate = {
+        "tasks": [], "low": 1, "high": 2, "hours": 1.5, "baseHours": 1.5,
+        "blockers": [], "assumptions": [], "references": [],
+        "provenance": {
+            "engineVersion": "integration-effort/2.0", "historyPolicy": "recorded",
+            "similarityThreshold": 0.45, "priorObservations": 4, "ratioBounds": [0.35, 3],
+            "driverWeights": {"direction": 3, "api": 3, "quality": 2, "volume": 1, "mapping": 2},
+            "referenceIds": [], "policyVersion": "fixed-calibration/v1",
+        },
+    }
+    payload_v1 = {
+        "schemaVersion": 1, "title": "Legacy snapshot",
+        "source": {"name": "brief.txt", "type": "text/plain", "characters": 10, "truncated": False, "reviewText": "A short brief"},
+        "suggestedScope": {}, "reviewedScope": {}, "estimate": estimate, "originalFile": None, "deliveryOutcome": None,
+    }
+    payload_v1["estimate"] = {**estimate, "provenance": {key: value for key, value in estimate["provenance"].items() if key != "policyVersion"}}
+    validate_payload(spec, "PrivateRecordSnapshotPayload", payload_v1, "version 1 legacy record")
+    payload_v2 = {
+        **payload_v1, "schemaVersion": 2, "estimate": estimate,
+        "baseline": {"id": "00000000-0000-4000-8000-000000000001", "createdAt": "2026-10-18T12:00:00Z", "sha256": "a" * 64, "estimateSha256": "b" * 64, "reviewedScopeSha256": "c" * 64, "engineVersion": "integration-effort/2.0", "policyVersion": "fixed-calibration/v1", "evaluationSplit": "training", "workPackageIds": ["import"]},
+        "provenance": {"sourceSha256": "d" * 64, "analysis": {"status": "succeeded"}},
+        "reviewDecisions": [{"id": "00000000-0000-4000-8000-000000000002", "kind": "scope-approved", "at": "2026-10-18T12:00:00Z", "actorId": "00000000-0000-4000-8000-000000000003", "decision": "approved"}],
+    }
+    validate_payload(spec, "PrivateRecordSnapshotPayload", payload_v2, "version 2 reviewed record")
+    delivery = {
+        "baselineId": payload_v2["baseline"]["id"], "baselineSha256": payload_v2["baseline"]["sha256"],
+        "submittedBy": "00000000-0000-4000-8000-000000000003", "reviewerId": "00000000-0000-4000-8000-000000000004",
+        "completedAt": "2026-10-18T12:00:00Z", "actualHours": {"import": 2}, "additionalScopeHours": 0,
+        "synthetic": False, "evidenceSource": "timesheet", "evidenceReference": "timesheet-1",
+        "reviewStatus": "approved", "evaluationSplit": "training", "calibrationEligible": True,
+        "calibrationReason": "Independently reviewed.",
+        "reviewDecisions": [{"id": "00000000-0000-4000-8000-000000000005", "kind": "delivery-review", "at": "2026-10-18T12:00:00Z", "actorId": "00000000-0000-4000-8000-000000000004", "decision": "approved", "note": "Checked against the source evidence."}],
+    }
+    validate_payload(spec, "PrivateDeliveryOutcome", delivery, "independently reviewed delivery outcome")
+    validate_payload(spec, "PrivateDeliveryInput", {"baselineId": payload_v2["baseline"]["id"], "baselineSha256": payload_v2["baseline"]["sha256"], "reviewerId": "00000000-0000-4000-8000-000000000004", "completedAt": "2026-10-18T12:00:00Z", "actualHours": {"import": 2}, "additionalScopeHours": 0, "synthetic": False, "evidenceSource": "timesheet", "evidenceReference": "timesheet-1"}, "delivery request with independent reviewer")
+    validate_payload(spec, "PrivateDeliveryReviewView", {"recordId": "00000000-0000-4000-8000-000000000006", "source": payload_v2["source"], "reviewedScope": {}, "estimate": estimate, "baseline": payload_v2["baseline"], "deliveryOutcome": {**delivery, "reviewStatus": "pending", "calibrationEligible": False, "calibrationReason": "Awaiting independent review.", "reviewDecisions": []}}, "assigned delivery review view")
+    create_v2 = {key: value for key, value in payload_v2.items() if key not in ("baseline", "provenance", "reviewDecisions")}
+    validate_payload(spec, "PrivateRecordCreate", {"schemaVersion": 2, "reviewConfirmed": True, "payload": create_v2}, "version 2 create input without server-assigned provenance")
+    for label, invalid in (("unsupported record version", {**payload_v2, "schemaVersion": 99}), ("legacy record with delivery data", {**payload_v1, "deliveryOutcome": {"hours": 4}})):
+        try:
+            validate_payload(spec, "PrivateRecordSnapshotPayload", invalid, label)
+        except ValueError:
+            continue
+        raise ValueError(f"{label} unexpectedly matched the private record contract")
+
+
+def validate_learning_artifact_schemas() -> None:
+    with SCOPING_DATASET_SCHEMA_PATH.open(encoding="utf-8-sig") as source:
+        dataset_schema = json.load(source)
+    with LEARNING_POLICY_SCHEMA_PATH.open(encoding="utf-8-sig") as source:
+        policy_schema = json.load(source)
+    Draft202012Validator.check_schema(dataset_schema)
+    Draft202012Validator.check_schema(policy_schema)
+    dataset_validator = Draft202012Validator(dataset_schema)
+    for line_number, line in enumerate(SCOPING_CANDIDATES_PATH.read_text(encoding="utf-8-sig").splitlines(), 1):
+        if not line.strip():
+            continue
+        case = json.loads(line)
+        errors = list(dataset_validator.iter_errors(case))
+        if errors:
+            raise ValueError(f"scoping candidate line {line_number} is invalid: {errors[0].message}")
+    valid_proposal = {
+        "schemaVersion": 1, "proposalId": "reviewed-proposal-example", "status": "approved",
+        "currentPolicyVersion": "fixed-calibration/v1", "proposedPolicyVersion": "fixed-calibration/v2",
+        "affectedDomain": "integration", "cohort": "recorded-holdout", "sampleCount": 30,
+        "evidence": {"trainingReport": "training.json", "heldOutReport": "holdout.json", "currentBehavior": "baseline policy", "proposedBehavior": "reviewed adjustment", "limitations": ["Descriptive cohort only."]},
+        "review": {"reviewerId": "reviewer-1", "reviewedAt": "2026-10-18T12:00:00Z", "decision": "approved", "note": "Evidence and limitations reviewed."},
+        "rollbackPolicyVersion": "fixed-calibration/v1",
+    }
+    if list(Draft202012Validator(policy_schema).iter_errors(valid_proposal)):
+        raise ValueError("learning policy proposal schema rejected its valid approval example")
+    draft_proposal = {key: value for key, value in valid_proposal.items() if key != "review"}
+    draft_proposal["status"] = "draft"
+    if list(Draft202012Validator(policy_schema).iter_errors(draft_proposal)):
+        raise ValueError("learning policy proposal schema rejected an unreviewed draft")
+    if not list(Draft202012Validator(policy_schema).iter_errors({**draft_proposal, "status": "approved"})):
+        raise ValueError("learning policy proposal schema accepted an approved proposal without review")
+    invalid_proposal = {**valid_proposal, "review": {**valid_proposal["review"], "decision": "rejected"}}
+    if not list(Draft202012Validator(policy_schema).iter_errors(invalid_proposal)):
+        raise ValueError("learning policy proposal schema accepted a mismatched approval decision")
 
 
 def check_service_health(spec: dict[str, Any], base_url: str, name: str, readiness_schema: str) -> None:
@@ -654,6 +743,8 @@ def main() -> int:
         validate_spec(spec)
         validate_spec(identity_spec)
         validate_service_token_scopes(spec)
+        validate_record_contract_compatibility(spec)
+        validate_learning_artifact_schemas()
         check_brief_auth_unit_tests()
         for component in spec["components"]["schemas"]:
             schema_for(spec, component)

@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://the-estimator.invalid/schemas/learning-policy-proposal-v1.json",
+  "title": "Learning policy proposal",
+  "type": "object",
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "proposalId": { "type": "string", "minLength": 1, "maxLength": 120 },
+    "status": { "enum": ["draft", "approved", "rejected", "deferred"] },
+    "currentPolicyVersion": { "type": "string", "minLength": 1 },
+    "proposedPolicyVersion": { "type": "string", "minLength": 1 },
+    "affectedDomain": { "type": "string", "minLength": 1 },
+    "cohort": { "type": "string", "minLength": 1 },
+    "sampleCount": { "type": "integer", "minimum": 0 },
+    "evidence": {
+      "type": "object",
+      "properties": {
+        "trainingReport": { "type": "string", "minLength": 1 },
+        "heldOutReport": { "type": "string", "minLength": 1 },
+        "currentBehavior": { "type": "string", "minLength": 1 },
+        "proposedBehavior": { "type": "string", "minLength": 1 },
+        "limitations": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 }
+      },
+      "required": ["trainingReport", "heldOutReport", "currentBehavior", "proposedBehavior", "limitations"],
+      "additionalProperties": false
+    },
+    "review": {
+      "type": "object",
+      "properties": {
+        "reviewerId": { "type": "string", "minLength": 1 },
+        "reviewedAt": { "type": "string", "format": "date-time" },
+        "decision": { "enum": ["approved", "rejected", "deferred"] },
+        "note": { "type": "string", "minLength": 3, "maxLength": 2000 }
+      },
+      "required": ["reviewerId", "reviewedAt", "decision", "note"],
+      "additionalProperties": false
+    },
+    "rollbackPolicyVersion": { "type": "string", "minLength": 1 }
+  },
+  "required": ["schemaVersion", "proposalId", "status", "currentPolicyVersion", "proposedPolicyVersion", "affectedDomain", "cohort", "sampleCount", "evidence", "rollbackPolicyVersion"],
+  "allOf": [
+    { "if": { "properties": { "status": { "const": "approved" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "approved" } } } } } },
+    { "if": { "properties": { "status": { "const": "rejected" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "rejected" } } } } } },
+    { "if": { "properties": { "status": { "const": "deferred" } } }, "then": { "required": ["review"], "properties": { "review": { "properties": { "decision": { "const": "deferred" } } } } } }
+  ],
+  "additionalProperties": false
+}

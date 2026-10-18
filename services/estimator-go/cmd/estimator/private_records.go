@@ -30,6 +30,9 @@ import (
 //go:embed migrations/001_private_records.sql
 var privateRecordSchema string
 
+//go:embed migrations/002_lifecycle.sql
+var privateRecordLifecycleSchema string
+
 type recordStore struct {
 	pool             *pgxpool.Pool
 	serviceTokenKeys map[string][]byte
@@ -52,6 +55,9 @@ type recordPayload struct {
 	ReviewedScope   json.RawMessage `json:"reviewedScope"`
 	Estimate        json.RawMessage `json:"estimate"`
 	DeliveryOutcome json.RawMessage `json:"deliveryOutcome"`
+	Baseline        json.RawMessage `json:"baseline"`
+	Provenance      json.RawMessage `json:"provenance"`
+	ReviewDecisions json.RawMessage `json:"reviewDecisions"`
 }
 
 type recordSource struct {
@@ -137,6 +143,10 @@ func openRecordStore() (*recordStore, error) {
 	if _, err := pool.Exec(ctx, privateRecordSchema); err != nil {
 		pool.Close()
 		return nil, errors.New("private-record schema could not be initialized")
+	}
+	if _, err := pool.Exec(ctx, privateRecordLifecycleSchema); err != nil {
+		pool.Close()
+		return nil, errors.New("private-record lifecycle schema could not be initialized")
 	}
 	if err := store.cleanupExpiredRecords(ctx); err != nil {
 		slog.Error("private_record_startup_cleanup_failed", "service", "estimator-go")
@@ -314,11 +324,17 @@ func requiredRecordScope(method, path string) string {
 		}
 	case http.MethodPatch:
 		if strings.HasPrefix(path, "/v1/records/") {
+			if strings.HasSuffix(path, "/delivery/review") {
+				return "private-records:update"
+			}
 			return "private-records:update"
 		}
 	case http.MethodPost:
 		if path == "/v1/records" {
 			return "private-records:create"
+		}
+		if strings.HasPrefix(path, "/v1/records/") && strings.HasSuffix(path, "/delivery") {
+			return "private-records:update"
 		}
 	case http.MethodDelete:
 		if path == "/v1/records" || strings.HasPrefix(path, "/v1/records/") {
@@ -409,23 +425,27 @@ func (store *recordStore) createRecord(w http.ResponseWriter, r *http.Request, p
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
 	var request createRecordRequest
-	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || request.SchemaVersion != 1 || !request.ReviewConfirmed || !json.Valid(request.Payload) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid version 1 estimate snapshot."})
+	if err := decoder.Decode(&request); err != nil || decoder.Decode(&struct{}{}) != io.EOF || (request.SchemaVersion != 1 && request.SchemaVersion != 2) || !request.ReviewConfirmed || !json.Valid(request.Payload) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid reviewed estimate snapshot."})
 		return
 	}
 	var payload recordPayload
-	if err := json.Unmarshal(request.Payload, &payload); err != nil || !validRecordPayload(payload) {
+	if err := json.Unmarshal(request.Payload, &payload); err != nil || payload.SchemaVersion != request.SchemaVersion || !validRecordPayload(payload) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "The saved estimate snapshot is incomplete."})
 		return
 	}
-	var normalized bytes.Buffer
-	if err := json.Compact(&normalized, request.Payload); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "The saved estimate snapshot is invalid."})
+	if !validReviewedScopeEvidence(payload) {
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]string{"error": "Every reviewed work item must retain a quote found in the extracted source."})
 		return
 	}
 	recordID, err := newUUID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The private estimate could not be saved."})
+		return
+	}
+	normalizedPayload, err := initializeRecordLifecycle(request.Payload, payload, recordID, principal, time.Now().UTC())
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "The estimate provenance could not be initialized."})
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
@@ -446,13 +466,13 @@ func (store *recordStore) createRecord(w http.ResponseWriter, r *http.Request, p
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The private estimate could not be saved."})
 		return
 	}
-	nonce, ciphertext, err := store.encryptField(accountID, recordID, "payload", normalized.Bytes())
+	nonce, ciphertext, err := store.encryptField(accountID, recordID, "payload", normalizedPayload)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The private estimate could not be saved."})
 		return
 	}
 	expiresAt := time.Now().UTC().AddDate(0, 0, store.retentionDays)
-	_, err = tx.Exec(ctx, `INSERT INTO estimator_records (id, account_id, schema_version, title_nonce, title_ciphertext, content_nonce, content_ciphertext, created_at, expires_at) VALUES ($1, $2, 1, $3, $4, $5, $6, now(), $7)`, recordID, accountID, titleNonce, titleCiphertext, nonce, ciphertext, expiresAt)
+	_, err = tx.Exec(ctx, `INSERT INTO estimator_records (id, account_id, schema_version, title_nonce, title_ciphertext, content_nonce, content_ciphertext, created_at, expires_at) VALUES ($1, $2, 2, $3, $4, $5, $6, now(), $7)`, recordID, accountID, titleNonce, titleCiphertext, nonce, ciphertext, expiresAt)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The private estimate could not be saved."})
 		return
@@ -466,16 +486,28 @@ func (store *recordStore) createRecord(w http.ResponseWriter, r *http.Request, p
 
 func validRecordPayload(payload recordPayload) bool {
 	title := strings.TrimSpace(payload.Title)
-	if payload.SchemaVersion != 1 || title == "" || len([]rune(title)) > 200 || strings.ContainsAny(title, "\r\n") {
+	if (payload.SchemaVersion != 1 && payload.SchemaVersion != 2) || title == "" || len([]rune(title)) > 200 || strings.ContainsAny(title, "\r\n") {
 		return false
 	}
-	if strings.TrimSpace(payload.Source.Name) == "" || len(payload.Source.Name) > 240 || len(payload.Source.Type) > 40 || payload.Source.Characters < 0 || strings.TrimSpace(payload.Source.ReviewText) == "" || len(payload.Source.ReviewText) > 200_000 {
+	if strings.TrimSpace(payload.Source.Name) == "" || len(payload.Source.Name) > 240 || len(payload.Source.Type) > 40 || payload.Source.Characters < 0 || payload.Source.Characters != len([]rune(payload.Source.ReviewText)) || strings.TrimSpace(payload.Source.ReviewText) == "" || len(payload.Source.ReviewText) > 200_000 {
 		return false
 	}
 	if len(bytes.TrimSpace(payload.OriginalFile)) == 0 || len(bytes.TrimSpace(payload.DeliveryOutcome)) == 0 {
 		return false
 	}
 	if !bytes.Equal(bytes.TrimSpace(payload.DeliveryOutcome), []byte("null")) {
+		if payload.SchemaVersion != 2 || !validDeliveryOutcome(payload.DeliveryOutcome, payload.Baseline) {
+			return false
+		}
+	}
+	if payload.SchemaVersion == 2 && len(bytes.TrimSpace(payload.Baseline)) > 0 {
+		var baseline frozenRecordBaseline
+		var provenance map[string]json.RawMessage
+		var decisions []lifecycleReviewDecision
+		if json.Unmarshal(payload.Baseline, &baseline) != nil || !isUUID(baseline.ID) || len(baseline.SHA256) != 64 || len(baseline.WorkPackageIDs) == 0 || (baseline.EvaluationSplit != "training" && baseline.EvaluationSplit != "holdout" && baseline.EvaluationSplit != "unassigned") || json.Unmarshal(payload.Provenance, &provenance) != nil || provenance == nil || json.Unmarshal(payload.ReviewDecisions, &decisions) != nil || len(decisions) == 0 {
+			return false
+		}
+	} else if payload.SchemaVersion == 2 && !bytes.Equal(bytes.TrimSpace(payload.DeliveryOutcome), []byte("null")) {
 		return false
 	}
 	var originalFile *recordSourceFile
@@ -500,6 +532,22 @@ func validRecordPayload(payload recordPayload) bool {
 	if json.Unmarshal(payload.ReviewedScope, &reviewed) != nil || len(reviewed.Requirements) == 0 || len(reviewed.Requirements) > 30 {
 		return false
 	}
+	if payload.SchemaVersion == 2 && len(bytes.TrimSpace(payload.Baseline)) == 0 {
+		var evidenceScope struct {
+			Requirements []struct {
+				ID       string `json:"id"`
+				Evidence string `json:"evidence"`
+			} `json:"requirements"`
+		}
+		if json.Unmarshal(payload.ReviewedScope, &evidenceScope) != nil {
+			return false
+		}
+		for _, requirement := range evidenceScope.Requirements {
+			if strings.TrimSpace(requirement.ID) == "" || !hasRecordSourceEvidence(payload.Source.ReviewText, requirement.Evidence) {
+				return false
+			}
+		}
+	}
 	var estimate struct {
 		Hours *float64 `json:"hours"`
 		Low   *int     `json:"low"`
@@ -511,6 +559,24 @@ func validRecordPayload(payload recordPayload) bool {
 	}
 	if *estimate.Hours < 0 || *estimate.Hours > 1_000_000 || *estimate.Low < 0 || *estimate.High < *estimate.Low || *estimate.High > 1_000_000 || *estimate.Hours < float64(*estimate.Low) || *estimate.Hours > float64(*estimate.High) {
 		return false
+	}
+	return true
+}
+
+func validReviewedScopeEvidence(payload recordPayload) bool {
+	var scope struct {
+		Requirements []struct {
+			ID       string `json:"id"`
+			Evidence string `json:"evidence"`
+		} `json:"requirements"`
+	}
+	if json.Unmarshal(payload.ReviewedScope, &scope) != nil || len(scope.Requirements) == 0 {
+		return false
+	}
+	for _, requirement := range scope.Requirements {
+		if strings.TrimSpace(requirement.ID) == "" || !hasRecordSourceEvidence(payload.Source.ReviewText, requirement.Evidence) {
+			return false
+		}
 	}
 	return true
 }

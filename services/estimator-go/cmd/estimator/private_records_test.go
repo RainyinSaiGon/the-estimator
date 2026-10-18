@@ -187,11 +187,23 @@ func TestPrivateRecordsTwoAccountAuthorizationIntegration(t *testing.T) {
 		request := httptest.NewRequest(method, path, strings.NewReader(body))
 		request.Header.Set("Authorization", "Bearer "+serviceToken)
 		if strings.HasPrefix(path, "/v1/records/") {
-			request.SetPathValue("recordID", strings.TrimPrefix(path, "/v1/records/"))
+			recordPath := strings.TrimPrefix(path, "/v1/records/")
+			if separator := strings.IndexByte(recordPath, '/'); separator >= 0 {
+				recordPath = recordPath[:separator]
+			}
+			request.SetPathValue("recordID", recordPath)
 		}
 		response := httptest.NewRecorder()
 		if path == "/v1/records" {
 			store.handleRecords(response, request)
+		} else if strings.HasSuffix(path, "/delivery") {
+			store.handleDelivery(response, request)
+		} else if strings.HasSuffix(path, "/delivery/review") {
+			if method == http.MethodGet {
+				store.handleDeliveryReviewView(response, request)
+			} else {
+				store.handleDeliveryReview(response, request)
+			}
 		} else {
 			store.handleRecord(response, request)
 		}
@@ -206,7 +218,7 @@ func TestPrivateRecordsTwoAccountAuthorizationIntegration(t *testing.T) {
 			"source":          map[string]any{"name": "brief.txt", "type": "txt", "characters": len(reviewText), "truncated": false, "reviewText": reviewText},
 			"originalFile":    nil,
 			"suggestedScope":  map[string]any{"summary": "suggested"},
-			"reviewedScope":   map[string]any{"requirements": []any{map[string]any{"id": "mapping"}}},
+			"reviewedScope":   map[string]any{"requirements": []any{map[string]any{"id": "mapping", "evidence": "CRM contact migration"}}},
 			"estimate":        map[string]any{"hours": 5, "low": 4, "high": 6, "tasks": []any{map[string]any{"category": "mapping"}}},
 			"deliveryOutcome": nil,
 		})
@@ -266,6 +278,125 @@ func TestPrivateRecordsTwoAccountAuthorizationIntegration(t *testing.T) {
 	ownerBRecord := create(ownerB, "Owner B estimate")
 	assertOnlyOwn(ownerA, ownerARecord, ownerBRecord)
 	assertOnlyOwn(ownerB, ownerBRecord, ownerARecord)
+
+	baselineResponse := call(http.MethodGet, "/v1/records/"+ownerARecord, ownerA, "private-records:read", "")
+	if baselineResponse.Code != http.StatusOK {
+		t.Fatalf("get record returned %d: %s", baselineResponse.Code, baselineResponse.Body.String())
+	}
+	var saved struct {
+		Payload recordPayload `json:"payload"`
+	}
+	if err := json.Unmarshal(baselineResponse.Body.Bytes(), &saved); err != nil {
+		t.Fatal(err)
+	}
+	var baseline frozenRecordBaseline
+	if err := json.Unmarshal(saved.Payload.Baseline, &baseline); err != nil {
+		t.Fatal(err)
+	}
+	deliveryBody, _ := json.Marshal(createDeliveryRequest{BaselineID: baseline.ID, BaselineSHA256: baseline.SHA256, ReviewerID: ownerB, CompletedAt: time.Now().UTC(), ActualHours: map[string]float64{"mapping": 6}, AdditionalHours: 2, EvidenceSource: "timesheet", EvidenceReference: "timesheet-case-1"})
+	if response := call(http.MethodPost, "/v1/records/"+ownerARecord+"/delivery", ownerB, "private-records:update", string(deliveryBody)); response.Code != http.StatusNotFound {
+		t.Fatalf("foreign owner delivery write returned %d: %s", response.Code, response.Body.String())
+	}
+	deliveryResponse := call(http.MethodPost, "/v1/records/"+ownerARecord+"/delivery", ownerA, "private-records:update", string(deliveryBody))
+	if deliveryResponse.Code != http.StatusCreated {
+		t.Fatalf("record delivery returned %d: %s", deliveryResponse.Code, deliveryResponse.Body.String())
+	}
+	reviewBody := `{"decision":"approved","note":"Verified against the test timesheet."}`
+	if response := call(http.MethodGet, "/v1/records/"+ownerARecord+"/delivery/review", ownerA, "private-records:read", ""); response.Code != http.StatusNotFound {
+		t.Fatalf("delivery submitter accessed independent review view with %d: %s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodPatch, "/v1/records/"+ownerARecord+"/delivery/review", ownerA, "private-records:update", reviewBody); response.Code != http.StatusNotFound {
+		t.Fatalf("delivery submitter reviewed own outcome with %d: %s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, "/v1/records/"+ownerARecord+"/delivery/review", ownerB, "private-records:read", ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "timesheet-case-1") {
+		t.Fatalf("assigned reviewer could not inspect the delivery evidence: %d %s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodGet, "/v1/records/"+ownerARecord, ownerB, "private-records:read", ""); response.Code != http.StatusNotFound {
+		t.Fatalf("assigned reviewer could read the owner's full workspace record: %d %s", response.Code, response.Body.String())
+	}
+	reviewResponse := call(http.MethodPatch, "/v1/records/"+ownerARecord+"/delivery/review", ownerB, "private-records:update", reviewBody)
+	if reviewResponse.Code != http.StatusOK {
+		t.Fatalf("delivery review returned %d: %s", reviewResponse.Code, reviewResponse.Body.String())
+	}
+	var reviewed struct {
+		DeliveryOutcome deliveryOutcome `json:"deliveryOutcome"`
+	}
+	if err := json.Unmarshal(reviewResponse.Body.Bytes(), &reviewed); err != nil {
+		t.Fatal(err)
+	}
+	if reviewed.DeliveryOutcome.ReviewStatus != "approved" || !reviewed.DeliveryOutcome.CalibrationEligible || reviewed.DeliveryOutcome.SubmittedBy != ownerA || reviewed.DeliveryOutcome.ReviewerID != ownerB || reviewed.DeliveryOutcome.ActualHours["mapping"] != 6 || reviewed.DeliveryOutcome.AdditionalHours != 2 || len(reviewed.DeliveryOutcome.ReviewDecisions) != 1 || reviewed.DeliveryOutcome.ReviewDecisions[0].ActorID != ownerB {
+		t.Fatalf("delivery review lost attribution or task-level actuals: %#v", reviewed.DeliveryOutcome)
+	}
+
+	legacyMapping := legacyOwnerMapping{LegacyOwnerID: "legacy-owner", FirstPartyAccountID: ownerA, ReviewerID: ownerA, ReviewedAt: time.Now().UTC(), Reason: "Owner verified with an approved account link."}
+	legacyRow := legacyMigrationRow{OwnerID: legacyMapping.LegacyOwnerID, RecordID: "legacy-project-1", Project: json.RawMessage(`{"title":"Imported CRM","brief":"Import 20 contacts and sync nightly.","scope":{"summary":"CRM import","domain":"integration","requirements":[{"id":"import","evidence":"Import 20 contacts"}]},"versions":[{"id":"legacy-baseline-1","at":"2026-10-01T12:00:00Z","estimate":{"hours":5,"baseHours":5,"low":4,"high":6,"tasks":[{"category":"mapping","label":"Field mapping"}]}}],"actuals":{"hours":{"mapping":7},"additionalHours":2,"synthetic":true}}`)}
+	legacyPayload, legacyTitle, err := convertLegacyProject(legacyRow, legacyMapping)
+	if err != nil {
+		t.Fatalf("convertLegacyProject() error = %v", err)
+	}
+	if imported, reason := importLegacyRecord(context.Background(), store, legacyRow, legacyMapping, legacyPayload, legacyTitle); !imported || reason != "" {
+		t.Fatalf("first migration import = (%v, %q)", imported, reason)
+	}
+	if imported, reason := importLegacyRecord(context.Background(), store, legacyRow, legacyMapping, legacyPayload, legacyTitle); imported || reason != "already_imported" {
+		t.Fatalf("retry migration import = (%v, %q), want idempotent skip", imported, reason)
+	}
+	legacyRecordID := deterministicUUID(legacyRow.OwnerID + ":" + legacyRow.RecordID)
+	legacyRead := call(http.MethodGet, "/v1/records/"+legacyRecordID, ownerA, "private-records:read", "")
+	if legacyRead.Code != http.StatusOK || !strings.Contains(legacyRead.Body.String(), `"legacy-unknown"`) || !strings.Contains(legacyRead.Body.String(), `"synthetic":true`) {
+		t.Fatalf("imported legacy archive did not preserve unknown provenance and synthetic actuals: %d %s", legacyRead.Code, legacyRead.Body.String())
+	}
+	changedLegacyRow := legacyRow
+	changedLegacyRow.Project = json.RawMessage(`{"title":"Changed project"}`)
+	changedRollback := rollbackLegacyMigration(context.Background(), []legacyMigrationRow{changedLegacyRow}, map[string]legacyOwnerMapping{legacyMapping.LegacyOwnerID: legacyMapping}, store)
+	if changedRollback.RolledBack != 0 || changedRollback.Rejected != 1 || changedRollback.Reasons["source_record_changed_since_import"] != 1 {
+		t.Fatalf("rollback accepted a changed source export: %#v", changedRollback)
+	}
+	if response := call(http.MethodGet, "/v1/records/"+legacyRecordID, ownerA, "private-records:read", ""); response.Code != http.StatusOK {
+		t.Fatalf("changed source export deleted the imported record: %d %s", response.Code, response.Body.String())
+	}
+	rollback := rollbackLegacyMigration(context.Background(), []legacyMigrationRow{legacyRow}, map[string]legacyOwnerMapping{legacyMapping.LegacyOwnerID: legacyMapping}, store)
+	if rollback.RolledBack != 1 || rollback.Rejected != 0 {
+		t.Fatalf("migration rollback did not reconcile: %#v", rollback)
+	}
+	if response := call(http.MethodGet, "/v1/records/"+legacyRecordID, ownerA, "private-records:read", ""); response.Code != http.StatusNotFound {
+		t.Fatalf("rolled-back legacy record returned %d: %s", response.Code, response.Body.String())
+	}
+
+	changedRecordRow := legacyRow
+	changedRecordRow.RecordID = "legacy-project-updated"
+	changedPayload, changedTitle, err := convertLegacyProject(changedRecordRow, legacyMapping)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if imported, reason := importLegacyRecord(context.Background(), store, changedRecordRow, legacyMapping, changedPayload, changedTitle); !imported || reason != "" {
+		t.Fatalf("second migration import = (%v, %q)", imported, reason)
+	}
+	changedRecordID := deterministicUUID(changedRecordRow.OwnerID + ":" + changedRecordRow.RecordID)
+	changedBaselineResponse := call(http.MethodGet, "/v1/records/"+changedRecordID, ownerA, "private-records:read", "")
+	var changedBaselinePayload struct {
+		Payload recordPayload `json:"payload"`
+	}
+	if changedBaselineResponse.Code != http.StatusOK || json.Unmarshal(changedBaselineResponse.Body.Bytes(), &changedBaselinePayload) != nil {
+		t.Fatalf("second imported record could not be loaded: %d %s", changedBaselineResponse.Code, changedBaselineResponse.Body.String())
+	}
+	var changedBaseline frozenRecordBaseline
+	if err := json.Unmarshal(changedBaselinePayload.Payload.Baseline, &changedBaseline); err != nil {
+		t.Fatal(err)
+	}
+	postImportDelivery, _ := json.Marshal(createDeliveryRequest{BaselineID: changedBaseline.ID, BaselineSHA256: changedBaseline.SHA256, ReviewerID: ownerB, CompletedAt: time.Now().UTC(), ActualHours: map[string]float64{"mapping": 7}, Synthetic: true, EvidenceSource: "unknown"})
+	if response := call(http.MethodPost, "/v1/records/"+changedRecordID+"/delivery", ownerA, "private-records:update", string(postImportDelivery)); response.Code != http.StatusCreated {
+		t.Fatalf("post-import delivery capture returned %d: %s", response.Code, response.Body.String())
+	}
+	changedRecordRollback := rollbackLegacyMigration(context.Background(), []legacyMigrationRow{changedRecordRow}, map[string]legacyOwnerMapping{legacyMapping.LegacyOwnerID: legacyMapping}, store)
+	if changedRecordRollback.RolledBack != 0 || changedRecordRollback.Rejected != 1 || changedRecordRollback.Reasons["imported_record_changed_since_import"] != 1 {
+		t.Fatalf("rollback deleted a record modified after import: %#v", changedRecordRollback)
+	}
+	if response := call(http.MethodGet, "/v1/records/"+changedRecordID, ownerA, "private-records:read", ""); response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"synthetic":true`) {
+		t.Fatalf("post-import delivery outcome was deleted: %d %s", response.Code, response.Body.String())
+	}
+	if response := call(http.MethodDelete, "/v1/records/"+changedRecordID, ownerA, "private-records:delete", ""); response.Code != http.StatusNoContent {
+		t.Fatalf("owner cleanup of the modified migration test record returned %d: %s", response.Code, response.Body.String())
+	}
 
 	for _, attack := range []struct {
 		name   string
