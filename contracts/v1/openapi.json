@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.3.0",
-    "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Local preview persistence is opt-in; private records stay unavailable until OIDC, service authentication, PostgreSQL, and encryption configuration are complete."
+    "version": "1.4.0",
+    "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Local preview persistence is opt-in; private records use first-party account sessions and require identity, service authentication, PostgreSQL, and encryption configuration."
   },
   "paths": {
     "/health/live": {
@@ -575,7 +575,7 @@
             }
           },
           "401": {
-            "description": "A valid OIDC session is required.",
+            "description": "A valid first-party identity session is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -597,10 +597,7 @@
         },
         "security": [
           {
-            "nextAuthSession": []
-          },
-          {
-            "secureNextAuthSession": []
+            "identitySession": []
           }
         ]
       },
@@ -640,7 +637,7 @@
             }
           },
           "401": {
-            "description": "A valid OIDC session is required.",
+            "description": "A valid first-party identity session is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -672,10 +669,7 @@
         },
         "security": [
           {
-            "nextAuthSession": []
-          },
-          {
-            "secureNextAuthSession": []
+            "identitySession": []
           }
         ]
       },
@@ -687,7 +681,7 @@
             "description": "The caller’s records and account mapping were deleted."
           },
           "401": {
-            "description": "A valid OIDC session is required.",
+            "description": "A valid first-party identity session is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -709,10 +703,7 @@
         },
         "security": [
           {
-            "nextAuthSession": []
-          },
-          {
-            "secureNextAuthSession": []
+            "identitySession": []
           }
         ]
       }
@@ -750,7 +741,7 @@
             }
           },
           "401": {
-            "description": "A valid OIDC session is required.",
+            "description": "A valid first-party identity session is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -782,10 +773,7 @@
         },
         "security": [
           {
-            "nextAuthSession": []
-          },
-          {
-            "secureNextAuthSession": []
+            "identitySession": []
           }
         ]
       },
@@ -797,7 +785,7 @@
             "description": "The owner’s record was deleted."
           },
           "401": {
-            "description": "A valid OIDC session is required.",
+            "description": "A valid first-party identity session is required.",
             "content": {
               "application/json": {
                 "schema": {
@@ -829,9 +817,81 @@
         },
         "security": [
           {
+            "identitySession": []
+          }
+        ]
+      }
+    },
+    "/api/v1/records/migrate-owner": {
+      "servers": [
+        {
+          "url": "http://127.0.0.1:3000",
+          "description": "Next.js BFF on the default local address"
+        }
+      ],
+      "post": {
+        "operationId": "migrateLegacyPrivateWorkspace",
+        "summary": "Move a previous provider-owned workspace to the first-party account",
+        "description": "Requires active first-party and previous-provider sessions. It never matches by email. Ownership changes and any required record re-encryption are atomic.",
+        "responses": {
+          "200": {
+            "description": "The migration completed or no previous workspace was found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerMigrationResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Both identity sessions are required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The same-origin request check failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A previous encrypted record could not be authenticated; no ownership changes were committed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "Identity or record storage is unavailable.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "identitySession": [],
             "nextAuthSession": []
           },
           {
+            "identitySession": [],
             "secureNextAuthSession": []
           }
         ]
@@ -2313,7 +2373,10 @@
       "PrivateRecordStatus": {
         "type": "object",
         "properties": {
-          "oidcConfigured": {
+          "identityConfigured": {
+            "type": "boolean"
+          },
+          "legacyMigrationAvailable": {
             "type": "boolean"
           },
           "recordsEnabled": {
@@ -2329,9 +2392,31 @@
           }
         },
         "required": [
-          "oidcConfigured",
+          "identityConfigured",
+          "legacyMigrationAvailable",
           "recordsEnabled",
           "retentionDays",
+          "message"
+        ],
+        "additionalProperties": false
+      },
+      "OwnerMigrationResult": {
+        "type": "object",
+        "properties": {
+          "migrated": {
+            "type": "boolean"
+          },
+          "recordCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "migrated",
+          "recordCount",
           "message"
         ],
         "additionalProperties": false
@@ -2597,11 +2682,17 @@
       }
     },
     "securitySchemes": {
+      "identitySession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "estimator_session",
+        "description": "HttpOnly first-party session cookie; Secure is set for HTTPS requests."
+      },
       "nextAuthSession": {
         "type": "apiKey",
         "in": "cookie",
         "name": "next-auth.session-token",
-        "description": "NextAuth session cookie; HTTPS deployments may use the __Secure-prefixed cookie name."
+        "description": "Temporary legacy OIDC session cookie used only for explicit workspace migration."
       },
       "serviceToken": {
         "type": "http",
@@ -2613,7 +2704,7 @@
         "type": "apiKey",
         "in": "cookie",
         "name": "__Secure-next-auth.session-token",
-        "description": "HTTPS NextAuth session cookie."
+        "description": "HTTPS temporary legacy OIDC session cookie used only for explicit workspace migration."
       }
     }
   }

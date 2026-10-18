@@ -33,19 +33,19 @@ docker compose up --build
 
 The preview accepts pasted text and bounded PDF, DOCX, XLSX, PPTX, CSV, TXT, Markdown, JSON, and EML files. The Python service extracts text locally. The default sample mode uses deterministic rules; the Go service returns either integration estimates with labelled synthetic references or general-work planning bands explicitly marked uncalibrated. By default the local preview is ephemeral and stores no request or estimate records.
 
-### Optional private workspaces
+### First-party identity and private workspaces
 
-P1 adds an opt-in, local-only private-record path. It remains disabled unless a generic OIDC provider, PostgreSQL, a shared web-to-Go service-token secret, a client-content encryption key, and an identity-index key are all configured. No provider or credentials are selected in this repository, so the standard Compose command remains ephemeral and the private save control stays unavailable. Configure the provider's callback as `http://localhost:3000/api/auth/callback/oidc` for a local setup.
+The local identity service owns account credentials and revocable sessions. The Next.js BFF stores opaque session tokens in an HttpOnly, SameSite cookie; PostgreSQL is not published to the host. Private-record requests use a short-lived service token with the first-party account UUID, and Go applies owner isolation before reading, writing, or deleting encrypted snapshots.
 
-After merging the placeholders in `compose.private-records.env.example` into your ignored root `.env.local` and configuring the values described in [service operations](docs/service-operations.md#optional-private-records), start the separate local database overlay. Preserve any existing `OPENAI_API_KEY` line when editing that local file:
+To enable the local private workspace, copy the placeholders from `compose.private-records.env.example` into the ignored root `.env.local`, generate distinct random values for every password/key, and preserve any existing `OPENAI_API_KEY` line. Start all three overlays under a unique project name:
 
 ```powershell
-docker compose --env-file .env.local -f compose.yaml -f compose.private-records.yaml up --build
+docker compose -p estimator-private-preview --env-file .env.local -f compose.yaml -f compose.identity.yaml -f compose.private-records.yaml up --build
 ```
 
-Only the web BFF is published on loopback. PostgreSQL and Go remain on the Compose network. The browser never supplies an owner ID: the BFF validates the OIDC session and signs a 60-second Go service token; Go verifies it and maps the issuer/subject to an internal account using a keyed pseudonymous index. Go is the only service with database credentials. Each saved version keeps the original suggestion, reviewed scope, source, uploaded original file (when present), and confirmed estimate as one AES-256-GCM encrypted snapshot. Titles and source content are encrypted; database metadata is limited to random IDs, a keyed owner index, timestamps, and schema version. Version 1 reserves a nullable delivery outcome for the later delivery-history phase. Users can open, delete one estimate, or delete their workspace; expired records are hidden immediately and purged every six hours. The configured retention defaults to 90 days and is bounded to 1–3650 days.
+Only the web app is published on loopback. `WEB_PORT` defaults to `3002` in this example so it can run beside the standard preview. Each saved version keeps the original suggestion, reviewed scope, source, uploaded original file (when present), and confirmed estimate as one AES-256-GCM encrypted snapshot. Titles and source content are encrypted; database metadata is limited to random IDs, a keyed owner index, timestamps, and schema version. Version 1 reserves a nullable delivery outcome for the later delivery-history phase. Users can open, delete one estimate, or delete their workspace; expired records are hidden immediately and purged every six hours. Retention defaults to 90 days and is bounded to 1–3650 days.
 
-This path is an unconfigured local preview, not a production-ready identity or migration system. It does not import existing Sites/D1 workspaces, and it does not change production routing or the judge URL. Do not rotate the content or identity-index key without a planned re-encryption/reindex operation.
+If a previous OIDC workspace contains records, the temporary migration flow requires an active first-party session and an active session with the previous provider. It never matches accounts by email. The Go service re-encrypts record snapshots and changes their owner in one database transaction. Keep the old provider callback only until the owner has verified the migrated records; then remove its credentials and compatibility code. The first-party prototype has no email verification, password recovery, MFA, or distributed abuse controls. It does not import Sites/D1 workspaces and does not change production routing or the judge URL. Do not use real client data or rotate the content/index keys without a planned migration.
 
 For a local AI run, point Compose at an ignored file that contains `OPENAI_API_KEY` (the root `.env.local` is the local configuration file when present). The key is passed only to the Python service at runtime; it is not copied into the web container or image:
 
@@ -121,26 +121,16 @@ npm run check:contracts
 
 Unit checks exercise evidence matching, missing information, deterministic estimates, scope exclusions, history adjustments, sparse-data uncertainty, baseline changes and invalid actual hours. Browser checks exercise the full stored workflow. See `docs/demo-script.md` for a reproducible walkthrough.
 
-### Optional first-party identity preview
-
-To run the local Go identity service, copy .env.example to the ignored .env.local file and set two separate URL-safe random values: IDENTITY_POSTGRES_PASSWORD and IDENTITY_BFF_SHARED_SECRET (at least 32 random bytes). Keep the database password URL-safe because Compose uses it in a local PostgreSQL connection URL.
-
-Start the local stack with:
-
-docker compose --env-file .env.local -f compose.yaml -f compose.identity.yaml up --build
-
-Open /sign-in to create two fictional local accounts and inspect /account. The identity service owns credentials and sessions, while the BFF keeps session tokens in an HttpOnly cookie. PostgreSQL is not published to the host. The sample estimate preview remains unsaved; identity sign-in alone does not make estimates persistent. This prototype has no email verification, recovery, MFA or distributed abuse controls and must not be used for production accounts or real client data. Existing hosted authentication and traffic are unchanged.
-
 ## How the numbers work
 The language model extracts requirements and confirmed facts, not hours. A separate numeric engine starts from explicit task base hours and adjusts them for direction, API readiness, mapping, quality and volume.
 
 Historical matches use weighted feature similarity of at least 0.45. Each task uses a median actual-to-base effort ratio, shrunk toward 1 with four prior observations. Individual ratios are bounded between 0.35 and 3. Unknowns, sparse history and observed spread widen a **heuristic planning range**, not a statistical confidence interval. Original-scope hours enter calibration; added scope does not. A project is excluded from its own current estimate.
 
 ## Source map
-- `apps/web/app/`: native Next.js and Tailwind application, with `/estimate`, preview routes, generic OIDC callback, and optional private-record BFF routes.
+- `apps/web/app/`: native Next.js and Tailwind application, with `/sign-in`, `/account`, `/estimate`, and private-record BFF routes; the generic OIDC callback is retained temporarily for explicit workspace migration.
 - `services/brief-intelligence/`: Python FastAPI document extraction, sample parser, and optional specialist-agent analysis.
-- `services/estimator-go/`: Go integration estimator, uncalibrated general-work planning, and the optional encrypted private-record store.
-- `compose.yaml`, `compose.private-records.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration; the private database overlay is opt-in.
+- `services/estimator-go/`: Go integration estimator, first-party identity service, uncalibrated general-work planning, and the encrypted private-record store.
+- `compose.yaml`, `compose.identity.yaml`, `compose.private-records.yaml`, `Dockerfile.web`, and service Dockerfiles: isolated local orchestration; identity and private databases are opt-in.
 - `docs/service-operations.md`: health checks, structured request logs, timeout defaults and secret-loading rules.
 - `docs/adr/0001-next-go-python-first-slice.md`: service ownership, boundaries and migration constraints.
 - `app/home-screen.tsx`: interactive product overview and sample entry points.

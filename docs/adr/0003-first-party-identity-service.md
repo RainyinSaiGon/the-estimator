@@ -46,14 +46,14 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 - Identity schema and session operations become a separately deployed service with its own database credentials and migrations.
 - Go record ownership can move from external `(issuer, subject)` claims to a stable internal account ID after explicit mapping.
 - Email verification, password recovery, MFA, and organization membership remain unresolved product/security work and block production use.
-- The initial service-level sign-in and account view do not persist estimates. Connecting private-record storage and migrating existing owner identities remain follow-up work.
-- The existing `apps/web/auth.ts` OIDC client can be removed if the first-party session API fully replaces it; any reused standards-based code must remain generic and documented.
+- The current preview connects first-party accounts to private records through a short-lived BFF-to-Go principal. A temporary explicit migration path requires both old and new sessions, does not match email, and transactionally re-encrypts records when owner account IDs change.
+- The existing `apps/web/auth.ts` OIDC client and callback are now migration-only compatibility code. Remove them after owners have confirmed their migrated records and no remaining data depends on the old owner key.
 
 ## Action items
 
 1. [ ] Confirm this ADR and the local account lifecycle before production use.
-2. [ ] Implement the identity service and versioned BFF contract.
-3. [ ] Validate session expiry/revocation and two-account access isolation in an isolated environment.
+2. [x] Implement the identity service and versioned BFF contract.
+3. [ ] Validate session expiry/revocation and two-account record access isolation in an isolated environment.
 4. [ ] Define email verification/recovery and account-migration procedures.
 5. [ ] Remove the obsolete provider integration after replacement parity is proven.
 
