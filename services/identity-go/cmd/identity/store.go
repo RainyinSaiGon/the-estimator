@@ -26,12 +26,13 @@ import (
 )
 
 const (
-	argonMemoryKiB    = 19 * 1024
-	argonIterations   = 2
-	argonParallelism  = 1
-	argonKeyBytes     = 32
-	argonSaltBytes    = 16
-	sessionTokenBytes = 32
+	argonMemoryKiB     = 19 * 1024
+	argonIterations    = 2
+	argonParallelism   = 1
+	argonKeyBytes      = 32
+	argonSaltBytes     = 16
+	sessionTokenBytes  = 32
+	sessionAbsoluteTTL = 30 * 24 * time.Hour
 )
 
 type identityStore struct {
@@ -245,6 +246,65 @@ func (store *identityStore) currentSession(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusOK, map[string]any{"account": result, "expiresAt": expiresAt.UTC()})
 }
 
+func (store *identityStore) renewSession(w http.ResponseWriter, r *http.Request) {
+	token := bearerToken(r.Header.Get("authorization"))
+	if token == "" {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in to continue."})
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var result account
+	var absoluteExpiresAt time.Time
+	err = tx.QueryRow(ctx, `SELECT a.id::text, a.email_normalized, a.display_name, s.absolute_expires_at FROM identity_sessions s JOIN identity_accounts a ON a.id = s.account_id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND s.absolute_expires_at > now() + interval '1 minute' FOR UPDATE OF s`, hashSession(token)).Scan(&result.ID, &result.Email, &result.DisplayName, &absoluteExpiresAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in to continue."})
+		return
+	}
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+
+	secret := make([]byte, sessionTokenBytes)
+	if _, err := rand.Read(secret); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The session could not be renewed."})
+		return
+	}
+	newToken := base64.RawURLEncoding.EncodeToString(secret)
+	newSessionID, err := newUUID()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The session could not be renewed."})
+		return
+	}
+	_, err = tx.Exec(ctx, `UPDATE identity_sessions SET revoked_at = now() WHERE token_hash = $1 AND revoked_at IS NULL`, hashSession(token))
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+	expiresAt := time.Now().UTC().Add(store.sessionTTL)
+	if expiresAt.After(absoluteExpiresAt) {
+		expiresAt = absoluteExpiresAt
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO identity_sessions (id, account_id, token_hash, expires_at, absolute_expires_at) VALUES ($1, $2, $3, $4, $5)`, newSessionID, result.ID, hashSession(newToken), expiresAt, absoluteExpiresAt)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+	if err := tx.Commit(ctx); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+		return
+	}
+	writeJSON(w, http.StatusOK, authResponse{Account: result, SessionToken: newToken, ExpiresAt: expiresAt})
+}
+
 func (store *identityStore) revokeSession(w http.ResponseWriter, r *http.Request) {
 	token := bearerToken(r.Header.Get("authorization"))
 	if token == "" {
@@ -276,8 +336,10 @@ func (store *identityStore) createSessionForAccount(ctx context.Context, executo
 	if err != nil {
 		return authResponse{}, err
 	}
-	expiresAt := time.Now().UTC().Add(store.sessionTTL)
-	_, err = executor.Exec(ctx, `INSERT INTO identity_sessions (id, account_id, token_hash, expires_at) VALUES ($1, $2, $3, $4)`, sessionID, owner.ID, hashSession(token), expiresAt)
+	createdAt := time.Now().UTC()
+	expiresAt := createdAt.Add(store.sessionTTL)
+	absoluteExpiresAt := createdAt.Add(sessionAbsoluteTTL)
+	_, err = executor.Exec(ctx, `INSERT INTO identity_sessions (id, account_id, token_hash, expires_at, absolute_expires_at) VALUES ($1, $2, $3, $4, $5)`, sessionID, owner.ID, hashSession(token), expiresAt, absoluteExpiresAt)
 	if err != nil {
 		return authResponse{}, err
 	}

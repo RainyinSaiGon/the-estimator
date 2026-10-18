@@ -13,8 +13,13 @@ CREATE TABLE IF NOT EXISTS identity_sessions (
     token_hash BYTEA NOT NULL UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     expires_at TIMESTAMPTZ NOT NULL,
+    absolute_expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ
 );
+
+ALTER TABLE identity_sessions ADD COLUMN IF NOT EXISTS absolute_expires_at TIMESTAMPTZ;
+UPDATE identity_sessions SET absolute_expires_at = expires_at WHERE absolute_expires_at IS NULL;
+ALTER TABLE identity_sessions ALTER COLUMN absolute_expires_at SET NOT NULL;
 
 CREATE INDEX IF NOT EXISTS identity_sessions_account_idx ON identity_sessions(account_id);
 CREATE INDEX IF NOT EXISTS identity_sessions_expiry_idx ON identity_sessions(expires_at);

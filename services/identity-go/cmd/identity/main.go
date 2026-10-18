@@ -59,6 +59,7 @@ func main() {
 	mux.Handle("POST /v1/accounts", store.withBFFAuth(http.HandlerFunc(store.registerAccount)))
 	mux.Handle("POST /v1/sessions", store.withBFFAuth(http.HandlerFunc(store.createSession)))
 	mux.Handle("GET /v1/session", store.withBFFAuth(http.HandlerFunc(store.currentSession)))
+	mux.Handle("POST /v1/session/renew", store.withBFFAuth(http.HandlerFunc(store.renewSession)))
 	mux.Handle("DELETE /v1/session", store.withBFFAuth(http.HandlerFunc(store.revokeSession)))
 
 	host := strings.TrimSpace(os.Getenv("HOST"))

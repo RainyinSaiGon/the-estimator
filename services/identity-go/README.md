@@ -8,11 +8,12 @@ This Go service owns local account credentials and revocable browser sessions. I
 - POST /v1/accounts creates an account and its first session.
 - POST /v1/sessions checks email/password and creates a session.
 - GET /v1/session resolves a valid opaque session token to its stable account ID.
+- POST /v1/session/renew revokes the current token and returns a replacement session token.
 - DELETE /v1/session revokes the session.
 
 Every versioned route requires the shared X-Identity-BFF-Secret. Session operations also require the opaque bearer token. The browser never receives the service secret. The BFF places the returned session token in an HttpOnly cookie and does not return the bearer token to client code.
 
-The account key is a random UUID. Passwords use Argon2id with a unique random salt; raw passwords are not stored. Session tokens are generated with crypto/rand; only their SHA-256 digests are persisted. PostgreSQL is dedicated to this service.
+The account key is a random UUID. Passwords use Argon2id with a unique random salt; raw passwords are not stored. Session tokens are generated with crypto/rand; only their SHA-256 digests are persisted. Session renewal rotates the token, revokes the previous token in the same database transaction, and preserves a 30-day absolute lifetime for that sign-in. Renewal is allowed only while the current session is active and the absolute lifetime has more than one minute remaining. Existing sessions receive their current expiry as the migration-time absolute limit. PostgreSQL is dedicated to this service.
 
 Sign-in attempts are throttled in PostgreSQL by a domain-separated HMAC of the normalized account email, so limits are shared across service replicas without storing the email in the throttle table. Five attempts are allowed in a ten-minute window; the next request is rejected for ten minutes. A successful sign-in clears that account's counter. A background cleanup removes inactive throttle rows after 24 hours. This is an account-level password-guessing control, not an IP or registration abuse limit; public deployments also need edge rate limits and abuse monitoring.
 
