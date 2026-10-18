@@ -10,6 +10,7 @@ on:
       - "scripts/check_web_health.mjs"
       - "scripts/validate_contracts.py"
       - "package.json"
+      - "package-lock.json"
       - "apps/web/package.json"
       - "apps/web/app/api/v1/preview/**"
       - "apps/web/app/health/**"
@@ -29,6 +30,7 @@ on:
       - "scripts/check_web_health.mjs"
       - "scripts/validate_contracts.py"
       - "package.json"
+      - "package-lock.json"
       - "apps/web/package.json"
       - "apps/web/app/api/v1/preview/**"
       - "apps/web/app/health/**"
@@ -67,8 +69,9 @@ jobs:
           go-version: "1.26.0"
           cache-dependency-path: services/estimator-go/go.mod
 
-      - name: Install contract and service dependencies
+      - name: Install BFF, contract and service dependencies
         run: |
+          npm ci --ignore-scripts --no-audit --no-fund
           python -m pip install --disable-pip-version-check \
             -r contracts/requirements.txt \
             -r services/brief-intelligence/requirements.txt

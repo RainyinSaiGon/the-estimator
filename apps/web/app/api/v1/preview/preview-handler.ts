@@ -1,4 +1,5 @@
 import { configuredPreviewTimeoutMs, configuredServiceUrl } from "../../../../lib/operations.ts";
+import { briefServiceAuthorization } from "../../../../lib/brief-service-auth.ts";
 
 const maxBriefLength = 20_000;
 const maxJsonBytes = 100_000;
@@ -103,6 +104,10 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
   if (input instanceof Response) return input;
   const fetchImpl = dependencies.fetchImpl ?? fetch;
   try {
+    const serviceAuthorization = await briefServiceAuthorization(input.file ? "briefs:analyze-document" : "briefs:analyze");
+    if (!serviceAuthorization) {
+      return Response.json({ error: "The analysis service is not configured." }, { status: 503, headers: { "cache-control": "no-store" } });
+    }
     const timeoutMs = dependencies.timeoutMs ?? configuredPreviewTimeoutMs();
     const briefUrl = dependencies.briefUrl ?? configuredServiceUrl("BRIEF_SERVICE_URL", "http://127.0.0.1:8001").toString().replace(/\/+$/, "");
     const deadline = Date.now() + timeoutMs;
@@ -111,7 +116,7 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
       if (remainingMs <= 0) throw new DOMException("Preview timed out.", "TimeoutError");
       return AbortSignal.timeout(remainingMs);
     };
-    const headers: Record<string, string> = {};
+    const headers: Record<string, string> = { authorization: serviceAuthorization };
     if (dependencies.requestId) headers["x-request-id"] = dependencies.requestId;
 
     let analyzeUrl = `${briefUrl}/v1/briefs/analyze`;

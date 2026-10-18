@@ -20,7 +20,7 @@ services:
     command:
       - --smtp
       - 0.0.0.0:1025
-      - --ui
+      - --listen
       - 0.0.0.0:8025
       - --smtp-tls-cert
       - /tls/mailpit.crt

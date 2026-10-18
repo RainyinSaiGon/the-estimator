@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -124,6 +128,189 @@ func TestConfiguredServiceTokenKeysValidatesRotationRing(t *testing.T) {
 				t.Fatal("expected invalid key configuration to fail")
 			}
 		})
+	}
+}
+
+func TestPrivateRecordsTwoAccountAuthorizationIntegration(t *testing.T) {
+	databaseURL := strings.TrimSpace(os.Getenv("RECORD_TEST_DATABASE_URL"))
+	if databaseURL == "" {
+		t.Skip("set RECORD_TEST_DATABASE_URL to a disposable PostgreSQL database to run private-record isolation checks")
+	}
+	serviceSecret := "record-service-test-secret-0123456789-abcdef"
+	contentKey := make([]byte, 32)
+	identityKey := make([]byte, 32)
+	for index := range contentKey {
+		contentKey[index] = byte(index + 1)
+		identityKey[index] = byte(255 - index)
+	}
+	t.Setenv("DATABASE_URL", databaseURL)
+	t.Setenv("SERVICE_TOKEN_SECRET", serviceSecret)
+	t.Setenv("SERVICE_TOKEN_KEY_ID", "record-test-key")
+	t.Setenv("SERVICE_TOKEN_VERIFICATION_KEYS", "")
+	t.Setenv("CLIENT_CONTENT_KEY", base64.StdEncoding.EncodeToString(contentKey))
+	t.Setenv("IDENTITY_INDEX_KEY", base64.StdEncoding.EncodeToString(identityKey))
+	t.Setenv("RECORD_RETENTION_DAYS", "90")
+	store, err := openRecordStore()
+	if err != nil {
+		t.Fatalf("openRecordStore() error = %v", err)
+	}
+	ownerA, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ownerB, err := newUUID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		for _, owner := range []recordPrincipal{{issuer: "first-party-v1", subject: ownerA}, {issuer: "first-party-v1", subject: ownerB}} {
+			_, _ = store.pool.Exec(ctx, `DELETE FROM estimator_accounts WHERE owner_key = $1`, store.ownerLookupKey(owner))
+		}
+		store.close()
+	})
+
+	call := func(method, path, subject, scope, body string) *httptest.ResponseRecorder {
+		now := time.Now()
+		serviceToken := signedRecordServiceTokenWithClaims(
+			t,
+			"record-test-key",
+			true,
+			[]byte(serviceSecret),
+			now,
+			scope,
+			"the-estimator-go",
+			now.Unix()+60,
+			map[string]any{"sub": subject},
+		)
+		request := httptest.NewRequest(method, path, strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer "+serviceToken)
+		if strings.HasPrefix(path, "/v1/records/") {
+			request.SetPathValue("recordID", strings.TrimPrefix(path, "/v1/records/"))
+		}
+		response := httptest.NewRecorder()
+		if path == "/v1/records" {
+			store.handleRecords(response, request)
+		} else {
+			store.handleRecord(response, request)
+		}
+		return response
+	}
+	create := func(subject, title string) string {
+		t.Helper()
+		reviewText := "The client requests a CRM contact migration and nightly synchronization."
+		payload, marshalErr := json.Marshal(map[string]any{
+			"schemaVersion":   1,
+			"title":           title,
+			"source":          map[string]any{"name": "brief.txt", "type": "txt", "characters": len(reviewText), "truncated": false, "reviewText": reviewText},
+			"originalFile":    nil,
+			"suggestedScope":  map[string]any{"summary": "suggested"},
+			"reviewedScope":   map[string]any{"requirements": []any{map[string]any{"id": "mapping"}}},
+			"estimate":        map[string]any{"hours": 5, "low": 4, "high": 6, "tasks": []any{map[string]any{"category": "mapping"}}},
+			"deliveryOutcome": nil,
+		})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		body, marshalErr := json.Marshal(map[string]any{"schemaVersion": 1, "reviewConfirmed": true, "payload": json.RawMessage(payload)})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		response := call(http.MethodPost, "/v1/records", subject, "private-records:create", string(body))
+		if response.Code != http.StatusCreated {
+			t.Fatalf("create record for %s returned %d: %s", title, response.Code, response.Body.String())
+		}
+		var created struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &created); err != nil || !isUUID(created.ID) {
+			t.Fatalf("create response did not include record ID: %s (%v)", response.Body.String(), err)
+		}
+		return created.ID
+	}
+	listIDs := func(subject string) []string {
+		t.Helper()
+		response := call(http.MethodGet, "/v1/records", subject, "private-records:read", "")
+		if response.Code != http.StatusOK {
+			t.Fatalf("list records returned %d: %s", response.Code, response.Body.String())
+		}
+		var payload struct {
+			Records []recordSummary `json:"records"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+			t.Fatal(err)
+		}
+		ids := make([]string, 0, len(payload.Records))
+		for _, record := range payload.Records {
+			ids = append(ids, record.ID)
+		}
+		return ids
+	}
+	containsID := func(ids []string, id string) bool {
+		for _, candidate := range ids {
+			if candidate == id {
+				return true
+			}
+		}
+		return false
+	}
+	assertOnlyOwn := func(subject, ownID, foreignID string) {
+		t.Helper()
+		ids := listIDs(subject)
+		if len(ids) != 1 || !containsID(ids, ownID) || containsID(ids, foreignID) {
+			t.Fatalf("account %s received unexpected record IDs: %#v", subject, ids)
+		}
+	}
+	ownerARecord := create(ownerA, "Owner A estimate")
+	ownerBRecord := create(ownerB, "Owner B estimate")
+	assertOnlyOwn(ownerA, ownerARecord, ownerBRecord)
+	assertOnlyOwn(ownerB, ownerBRecord, ownerARecord)
+
+	for _, attack := range []struct {
+		name   string
+		method string
+		path   string
+		scope  string
+		body   string
+	}{{
+		name: "read another account record", method: http.MethodGet, path: "/v1/records/" + ownerBRecord, scope: "private-records:read",
+	}, {
+		name: "rename another account record", method: http.MethodPatch, path: "/v1/records/" + ownerBRecord, scope: "private-records:update", body: `{"title":"stolen rename"}`,
+	}, {
+		name: "delete another account record", method: http.MethodDelete, path: "/v1/records/" + ownerBRecord, scope: "private-records:delete",
+	}} {
+		t.Run(attack.name, func(t *testing.T) {
+			response := call(attack.method, attack.path, ownerA, attack.scope, attack.body)
+			if response.Code != http.StatusNotFound {
+				t.Fatalf("cross-account operation returned %d, want 404: %s", response.Code, response.Body.String())
+			}
+		})
+	}
+	assertOnlyOwn(ownerA, ownerARecord, ownerBRecord)
+	assertOnlyOwn(ownerB, ownerBRecord, ownerARecord)
+
+	updateOwn := call(http.MethodPatch, "/v1/records/"+ownerARecord, ownerA, "private-records:update", `{"title":"Owner A renamed"}`)
+	if updateOwn.Code != http.StatusOK {
+		t.Fatalf("owner update returned %d: %s", updateOwn.Code, updateOwn.Body.String())
+	}
+	foreignDelete := call(http.MethodDelete, "/v1/records/"+ownerARecord, ownerB, "private-records:delete", "")
+	if foreignDelete.Code != http.StatusNotFound {
+		t.Fatalf("reverse cross-account delete returned %d, want 404", foreignDelete.Code)
+	}
+	assertOnlyOwn(ownerA, ownerARecord, ownerBRecord)
+	assertOnlyOwn(ownerB, ownerBRecord, ownerARecord)
+	ownerADelete := call(http.MethodDelete, "/v1/records/"+ownerARecord, ownerA, "private-records:delete", "")
+	if ownerADelete.Code != http.StatusNoContent {
+		t.Fatalf("owner delete returned %d, want 204: %s", ownerADelete.Code, ownerADelete.Body.String())
+	}
+	if ids := listIDs(ownerA); len(ids) != 0 {
+		t.Fatalf("deleted owner workspace still contains records: %#v", ids)
+	}
+	assertOnlyOwn(ownerB, ownerBRecord, ownerARecord)
+	ownerBDelete := call(http.MethodDelete, "/v1/records/"+ownerBRecord, ownerB, "private-records:delete", "")
+	if ownerBDelete.Code != http.StatusNoContent {
+		t.Fatalf("second owner delete returned %d, want 204: %s", ownerBDelete.Code, ownerBDelete.Body.String())
 	}
 }
 

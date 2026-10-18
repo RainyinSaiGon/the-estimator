@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { jwtVerify } from "jose";
 import { handleEstimateConfirmation, handlePreviewRequest } from "../apps/web/app/api/v1/preview/preview-handler.ts";
 
 const briefUrl = "http://brief.test";
@@ -11,7 +12,11 @@ const { scope, estimate } = JSON.parse(input);
 function makeRequest(body, path = "/api/v1/preview") {
   return new Request(`http://estimator.test${path}`, {
     method: "POST",
-    headers: { "content-type": "application/json" },
+    headers: {
+      "content-type": "application/json",
+      authorization: "Bearer browser-user-token-must-not-be-forwarded",
+      cookie: "estimator_session=browser-session-must-not-be-forwarded",
+    },
     body,
   });
 }
@@ -21,6 +26,28 @@ function makeOptions(fetchImpl, timeoutMs = 1000) {
 }
 
 const results = [];
+
+async function assertBriefServiceCredential(options, expectedScope) {
+  const authorization = options.headers.authorization;
+  assert.equal(typeof authorization, "string", "BFF must mint a server-side service credential");
+  assert.match(authorization, /^Bearer ey/);
+  assert.equal(options.headers.cookie, undefined, "browser cookies must not reach Python");
+  assert.notEqual(authorization, "Bearer browser-user-token-must-not-be-forwarded");
+  const token = authorization.slice("Bearer ".length);
+  const { payload, protectedHeader } = await jwtVerify(token, new TextEncoder().encode(process.env.BRIEF_SERVICE_TOKEN_SECRET), {
+    algorithms: ["HS256"],
+    issuer: "the-estimator-web",
+    audience: "the-estimator-brief-intelligence",
+  });
+  assert.equal(protectedHeader.kid, process.env.BRIEF_SERVICE_TOKEN_KEY_ID);
+  assert.equal(payload.sub, "the-estimator-web");
+  assert.equal(payload.scope, expectedScope);
+  assert.deepEqual(Object.keys(payload).sort(), ["aud", "exp", "iat", "iss", "jti", "scope", "sub"]);
+  assert.ok(Number.isInteger(payload.iat) && Number.isInteger(payload.exp));
+  assert.ok(payload.exp > payload.iat && payload.exp - payload.iat <= 60);
+  assert.match(payload.jti, /^[0-9a-f-]{36}$/i);
+  return token;
+}
 
 async function collect(name, response, expectedStatus) {
   const body = await response.json();
@@ -40,11 +67,13 @@ const analysisResponse = await handlePreviewRequest(
     assert.equal(options.headers["x-request-id"], "00000000-0000-4000-8000-000000000001");
     assert.ok(options.signal instanceof AbortSignal);
     assert.equal(JSON.parse(options.body).parser, "sample");
+    assert.equal(JSON.stringify(options.body).includes("browser-user-token-must-not-be-forwarded"), false);
     return Response.json(scope);
   }),
 );
 assert.equal(analysisCalls.length, 1, "analysis must call only Python and must not calculate an estimate");
 assert.equal(analysisResponse.headers.get("cache-control"), "no-store");
+await assertBriefServiceCredential(analysisCalls[0].options, "briefs:analyze");
 await collect("analysis-success", analysisResponse, 200);
 
 const documentScope = { ...scope, source: { ...scope.source, name: "client-brief.txt", type: "txt" } };
@@ -62,10 +91,22 @@ const documentAnalysisResponse = await handlePreviewRequest(
     assert.equal(options.body.get("file").name, "client-brief.txt");
     assert.equal(options.body.get("parser"), "sample");
     assert.equal(options.body.get("capabilities"), "[]");
+    await assertBriefServiceCredential(options, "briefs:analyze-document");
     return Response.json(documentScope);
   }),
 );
 await collect("document-analysis-success", documentAnalysisResponse, 200);
+
+const savedSecret = process.env.BRIEF_SERVICE_TOKEN_SECRET;
+process.env.BRIEF_SERVICE_TOKEN_SECRET = "";
+await collect(
+  "analysis-missing-service-configuration",
+  await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief })), makeOptions(async () => {
+    throw new Error("BFF must not call Python without a signing key");
+  })),
+  503,
+);
+process.env.BRIEF_SERVICE_TOKEN_SECRET = savedSecret;
 
 await collect(
   "malformed-json",
@@ -149,6 +190,7 @@ const estimateResponse = await handleEstimateConfirmation(
     assert.equal(options.method, "POST");
     assert.equal(options.cache, "no-store");
     assert.equal(options.headers["content-type"], "application/json");
+    assert.equal(options.headers.authorization, undefined, "estimate-only calls must not receive Python credentials");
     const payload = JSON.parse(options.body);
     assert.deepEqual(payload.scope, {
       summary: scope.summary,
