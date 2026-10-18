@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator first-party identity API",
-    "version": "1.0.0",
-    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Email verification and password recovery are intentionally unavailable in the local preview; an account with a lost password cannot self-recover."
+    "version": "1.1.0",
+    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Account registration creates an unverified account; email must be verified before the BFF may issue a private-record service token. Verification and password recovery use one-time expiring tokens and an internal mailer. With IDENTITY_EMAIL_MODE=disabled, email actions return a generic unavailable response and private-record access remains blocked. This v1.1 lifecycle contract is contract-first; its new email routes and verified-account behavior are not implemented by the current service yet."
   },
   "servers": [
     {
@@ -62,7 +62,7 @@
         },
         "responses": {
           "201": {
-            "description": "The account and session were created.",
+            "description": "An unverified account and its first session were created. The BFF requests email verification; private-record access remains blocked until verification completes.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/SessionCreated" }
@@ -153,6 +153,84 @@
           "503": { "description": "Identity storage is temporarily unavailable." }
         }
       }
+    },
+    "/v1/email-verifications": {
+      "post": {
+        "operationId": "requestEmailVerification",
+        "summary": "Send a verification message to the signed-in account",
+        "description": "The service derives the destination from the authenticated account; callers cannot supply another address. Requests are throttled. The response does not include a verification token.",
+        "security": [{ "serviceSecret": [], "sessionBearer": [] }],
+        "responses": {
+          "202": { "description": "The request was accepted for delivery." },
+          "401": { "description": "The account session is missing, expired, or revoked." },
+          "429": { "description": "Verification requests are temporarily limited." },
+          "503": { "description": "Email delivery is unavailable." }
+        }
+      }
+    },
+    "/v1/email-verifications/complete": {
+      "post": {
+        "operationId": "completeEmailVerification",
+        "summary": "Verify an account email using a single-use token",
+        "security": [{ "serviceSecret": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CompleteEmailVerification" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "The token was valid and the account email is verified." },
+          "400": { "description": "The token is invalid, expired, or already used." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
+    },
+    "/v1/password-recovery-requests": {
+      "post": {
+        "operationId": "requestPasswordRecovery",
+        "summary": "Request a password recovery message",
+        "description": "For a well-formed address, return the same 202 response whether the account exists or has a verified email. Apply account and request throttles without disclosing account state. When email delivery is disabled, return the same generic 503 for every address.",
+        "security": [{ "serviceSecret": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/PasswordRecoveryRequest" }
+            }
+          }
+        },
+        "responses": {
+          "202": { "description": "The request was accepted; account existence is not disclosed." },
+          "400": { "description": "The request is malformed." },
+          "429": { "description": "Recovery requests are temporarily limited." },
+          "503": { "description": "Email delivery is unavailable; account existence is not disclosed." }
+        }
+      }
+    },
+    "/v1/password-recoveries": {
+      "post": {
+        "operationId": "completePasswordRecovery",
+        "summary": "Replace a password using a single-use recovery token",
+        "description": "A successful reset consumes the token and revokes every active session for the account in the same transaction.",
+        "security": [{ "serviceSecret": [] }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/CompletePasswordRecovery" }
+            }
+          }
+        },
+        "responses": {
+          "204": { "description": "The password was replaced and existing sessions were revoked." },
+          "400": { "description": "The token is invalid, expired, or already used, or the new password is invalid." },
+          "429": { "description": "Recovery attempts are temporarily limited." },
+          "503": { "description": "Identity storage is temporarily unavailable." }
+        }
+      }
     }
   },
   "components": {
@@ -172,11 +250,12 @@
       "Account": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["accountId", "email", "displayName"],
+        "required": ["accountId", "email", "displayName", "emailVerified"],
         "properties": {
           "accountId": { "type": "string", "format": "uuid" },
           "email": { "type": "string", "format": "email", "maxLength": 254 },
-          "displayName": { "type": "string", "maxLength": 100 }
+          "displayName": { "type": "string", "maxLength": 100 },
+          "emailVerified": { "type": "boolean" }
         }
       },
       "CreateAccount": {
@@ -196,6 +275,31 @@
         "properties": {
           "email": { "type": "string", "format": "email", "maxLength": 254 },
           "password": { "type": "string", "minLength": 1, "maxLength": 1024 }
+        }
+      },
+      "CompleteEmailVerification": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token"],
+        "properties": {
+          "token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+        }
+      },
+      "PasswordRecoveryRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["email"],
+        "properties": {
+          "email": { "type": "string", "format": "email", "maxLength": 254 }
+        }
+      },
+      "CompletePasswordRecovery": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["token", "newPassword"],
+        "properties": {
+          "token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+          "newPassword": { "type": "string", "minLength": 12, "maxLength": 1024 }
         }
       },
       "SessionCreated": {

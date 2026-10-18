@@ -16,10 +16,12 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 - The Next.js BFF proxies registration, sign-in, sign-out, and session checks. It sets an HttpOnly, SameSite cookie with `Secure` in deployed HTTPS environments, no `Domain`, a bounded lifetime, and no token in browser-readable storage. The browser never receives a service token.
 - Session renewal rotates the opaque token transactionally, revokes the prior token, extends the idle expiry, and caps each sign-in at a 30-day absolute lifetime. Renewal requires more than one minute to remain in that lifetime. A session already present when this rule is introduced cannot be extended beyond its existing expiry.
 - The BFF and trusted Go services resolve a valid browser session to the stable internal account ID through the authenticated identity API. Each service must authorize every owner-scoped operation against that ID. Python receives no identity database access or private-record authority.
-- The local BFF-to-estimator contract uses a short-lived HS256 JWT for one internal service call, not as a browser or user session token. Its protected header carries `kid`; claims are `iss=the-estimator-web`, `aud=the-estimator-go`, `sub=<stable account UUID>`, `identity_authority=first-party-v1`, `jti`, `iat`, `exp` (at most 60 seconds), and exactly one operation scope (`private-records:read`, `:create`, `:update`, or `:delete`). Go accepts only configured key IDs and validates all required claims before authorizing the route.
-- Rotate the internal signing key by first configuring Go to verify both old and new key IDs, then switching the BFF signer, and removing the old key after at least two minutes. Keep the legacy key ID during the first rotation only for already-issued, short-lived tokens. This documents the existing local protocol; the custom Go JWT parser is a production gate and must be replaced with a maintained JWT validation library before production use.
+- The local BFF-to-estimator contract uses a short-lived HS256 JWT for one internal service call, not as a browser or user session token. Its protected header carries `kid`; claims are `iss=the-estimator-web`, exactly one `aud=the-estimator-go`, `sub=<stable account UUID>`, `identity_authority=first-party-v1`, `jti`, `iat`, `exp` (after `iat` and no more than 60 seconds later), and exactly one operation scope (`private-records:read`, `:create`, `:update`, or `:delete`). The token must not carry an owner identifier; Go derives the owner only from the validated subject. Go validates the token with `github.com/golang-jwt/jwt/v5` pinned at v5.3.1, using an explicit HS256 allowlist, required issuer/audience/expiry, configured key IDs, and the exact route scope. Once the email lifecycle is implemented, the BFF may issue it only after the identity service confirms a verified account.
+- Rotate the internal signing key by first configuring Go to verify both old and new key IDs, then switching the BFF signer, and removing the old key after at least two minutes. Keep the legacy key ID during the first rotation only for already-issued, short-lived tokens.
 - Start with account-owner authorization only. Do not add organization roles or delegated access until a product workflow requires them.
-- Keep account recovery and email verification unavailable in the local prototype until an email-delivery path is designed. This limitation blocks production use; the local service must say so clearly.
+- Account registration creates an unverified account. A verified email is required before the BFF may mint a private-record service token. Email verification and password recovery each use separate, random, single-use, expiring tokens stored only as digests. Verification tokens expire after 24 hours; recovery tokens expire after 30 minutes. A successful password reset revokes every active session for the account.
+- Email verification and recovery are delivered through an internal mailer boundary. `IDENTITY_EMAIL_MODE=disabled|smtp` selects the local delivery mode. `disabled` is allowed only for local preview: registration may create an unverified account, but email actions return a generic unavailable response and private-record access stays blocked. `smtp` requires `IDENTITY_SMTP_HOST`, `IDENTITY_SMTP_PORT`, `IDENTITY_SMTP_FROM`, and secret `IDENTITY_SMTP_USERNAME`/`IDENTITY_SMTP_PASSWORD`; delivery must use STARTTLS with certificate verification. In SMTP mode, recovery requests return the same accepted response for known, unknown, and unverified addresses and are throttled. Missing delivery configuration must not expose whether an account exists.
+- The v1.1 identity OpenAPI contract defines registration, sign-in, sign-out, session renewal/revocation, verification, recovery, and the BFF-to-estimator authorization boundary. This lifecycle extension is contract-first; verification and recovery routes remain unimplemented until the separate P1 task. The estimator service owns the decision to allow each record operation: it validates a BFF service token and checks the subject against its own owner mapping. The identity service does not read record tables, and the web app or Python service must not read identity tables.
 - Persist sign-in throttling in the identity database using a keyed pseudonymous account identifier so limits are shared across replicas without storing raw email in the throttle table. This control does not replace edge/IP limits or registration abuse controls.
 - Use first-party identity exclusively in the local preview. The legacy OIDC callback, configuration, token compatibility, and owner-migration path are removed. A future migration of hosted accounts or records requires a separately approved plan; do not infer ownership from email.
 - Keep the public Site and its existing authentication path unchanged. This ADR does not authorize a production deployment, data migration, or traffic cutover.
@@ -49,16 +51,17 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 - Auth0 client credentials are not required by the first-party local preview.
 - Identity schema and session operations become a separately deployed service with its own database credentials and migrations.
 - Go private-record ownership is keyed by the stable first-party internal account ID. The removed external-provider identity is not accepted by local services.
-- Email verification, password recovery, MFA, and organization membership remain unresolved product/security work and block production use.
+- Email verification/recovery contracts are decided, but their delivery and lifecycle behavior remain to be implemented. MFA, account/session retention, abuse monitoring, independent security review, and provider migration remain production gates.
 - The current preview connects first-party accounts to private records through a short-lived BFF-to-Go principal. Go accepts only first-party account UUIDs; the prior OIDC claims and owner-migration operation are no longer supported.
 
 ## Action items
 
-1. [ ] Confirm this ADR and the local account lifecycle before production use.
+1. [x] Record the first-party identity boundary, token contract, and account lifecycle policy for the local preview.
 2. [x] Implement the identity service and versioned BFF contract.
 3. [ ] Validate session expiry/revocation and two-account record access isolation in an isolated environment.
-4. [ ] Define email verification/recovery and account-migration procedures.
+4. [x] Define versioned email verification/recovery contracts, delivery configuration, and token lifecycle; implementation is tracked separately.
 5. [x] Remove the obsolete local provider integration after the owner chose deletion of the only legacy record. Hosted identity was not changed.
+6. [ ] Review any future hosted account or data migration separately; never infer ownership from email.
 
 ## References
 
@@ -67,3 +70,4 @@ The P1 private-record implementation in [PR #25](https://github.com/RainyinSaiGo
 - [First-party identity threat model and production gates](../identity-threat-model.md)
 - [Go `crypto/rand` documentation](https://pkg.go.dev/crypto/rand)
 - [Go `x/crypto/argon2` package](https://pkg.go.dev/golang.org/x/crypto/argon2)
+- [golang-jwt/jwt v5 releases](https://github.com/golang-jwt/jwt/releases)

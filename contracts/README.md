@@ -1,6 +1,6 @@
 # Preview API contracts
 
-The v1/identity-openapi.json document is the internal OpenAPI 3.1 contract for the first-party Go identity service. It covers account creation, session creation, session validation/revocation and service health. It is an internal BFF/service contract; the browser must never call the Go identity API directly.
+The v1/identity-openapi.json document is the internal OpenAPI 3.1 contract for the first-party Go identity service. It covers account creation, sign-in, session validation/renewal/revocation, the contract-first email verification and password recovery lifecycle, and service health. The v1.1 email lifecycle additions are not implemented yet; issue #29 tracks that work. It is an internal BFF/service contract; the browser must never call the Go identity API directly.
 
 `v1/openapi.json` is the shared OpenAPI 3.1 contract for:
 
@@ -9,7 +9,7 @@ The v1/identity-openapi.json document is the internal OpenAPI 3.1 contract for t
 - `POST /v1/briefs/analyze` and `POST /v1/briefs/analyze-document` in the Python intake and analysis service;
 - `POST /v1/estimates`, `POST /v1/estimates/general`, `GET /v1/records/status`, and the internal private-record routes in the Go estimator.
 
-The paths and wire behavior remain owned by those services. The document records current casing (`initialAnswers`, `historyPolicy`, `referenceIds`), accepted answer values, parser behavior, input limits, and known JSON error bodies. The BFF accepts pasted JSON or bounded multipart document uploads and supports explicit `sample` or `ai` mode. Sample mode works without credentials. AI mode requires local server configuration and can return a provider or permissions error; it never silently switches to sample mode. The Go integration endpoint defaults a missing history policy to `demo` and accepts `demo` or `recorded`; the general-work endpoint uses explicitly uncalibrated complexity bands. Private-record routes use first-party identity sessions and remain unavailable unless identity, service-token, PostgreSQL, and encryption settings are configured.
+The paths and wire behavior remain owned by those services. The document records current casing (`initialAnswers`, `historyPolicy`, `referenceIds`), accepted answer values, parser behavior, input limits, and known JSON error bodies. The BFF accepts pasted JSON or bounded multipart document uploads and supports explicit `sample` or `ai` mode. Sample mode works without credentials. AI mode requires local server configuration and can return a provider or permissions error; it never silently switches to sample mode. The Go integration endpoint defaults a missing history policy to `demo` and accepts `demo` or `recorded`; the general-work endpoint uses explicitly uncalibrated complexity bands. Private-record routes use first-party identity sessions and remain unavailable unless identity, service-token, PostgreSQL, and encryption settings are configured. Their BFF-to-Go JWT contract requires a single audience, stable account subject, exact per-operation scope, and no client-selected owner claim. After the email lifecycle implementation, only verified accounts may receive a record service token.
 
 ## Validation
 
