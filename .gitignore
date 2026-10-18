@@ -55,6 +55,7 @@ next-env.d.ts
 *.py[cod]
 # Checkout-local execution profile and tool state; never publish them.
 /.sites-runtime/
+/.local/mailpit/
 /.agents/
 /.codex/
 /outputs/

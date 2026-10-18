@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-//go:embed migrations/001_identity.sql
+//go:embed migrations/*.sql
 var migrationFiles embed.FS
 
 func main() {
@@ -61,6 +61,10 @@ func main() {
 	mux.Handle("GET /v1/session", store.withBFFAuth(http.HandlerFunc(store.currentSession)))
 	mux.Handle("POST /v1/session/renew", store.withBFFAuth(http.HandlerFunc(store.renewSession)))
 	mux.Handle("DELETE /v1/session", store.withBFFAuth(http.HandlerFunc(store.revokeSession)))
+	mux.Handle("POST /v1/email-verifications", store.withBFFAuth(http.HandlerFunc(store.requestEmailVerification)))
+	mux.Handle("POST /v1/email-verifications/complete", store.withBFFAuth(http.HandlerFunc(store.completeEmailVerification)))
+	mux.Handle("POST /v1/password-recovery-requests", store.withBFFAuth(http.HandlerFunc(store.requestPasswordRecovery)))
+	mux.Handle("POST /v1/password-recoveries", store.withBFFAuth(http.HandlerFunc(store.completePasswordRecovery)))
 
 	host := strings.TrimSpace(os.Getenv("HOST"))
 	if host == "" {
@@ -98,6 +102,9 @@ func main() {
 				ctx, cancel := context.WithTimeout(shutdownContext, 3*time.Second)
 				if err := store.pruneLoginAttempts(ctx); err != nil {
 					slog.Warn("identity_login_attempt_cleanup_failed", "service", "identity-go", "reason", err.Error())
+				}
+				if err := store.pruneLifecycleData(ctx); err != nil {
+					slog.Warn("identity_lifecycle_cleanup_failed", "service", "identity-go", "reason", err.Error())
 				}
 				cancel()
 			}

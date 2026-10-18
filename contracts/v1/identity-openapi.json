@@ -3,7 +3,7 @@
   "info": {
     "title": "The Estimator first-party identity API",
     "version": "1.1.0",
-    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Account registration creates an unverified account; email must be verified before the BFF may issue a private-record service token. Verification and password recovery use one-time expiring tokens and an internal mailer. With IDENTITY_EMAIL_MODE=disabled, email actions return a generic unavailable response and private-record access remains blocked. This v1.1 lifecycle contract is contract-first; its new email routes and verified-account behavior are not implemented by the current service yet."
+    "description": "Internal service contract for the Next.js BFF and trusted services. It is not a public browser API. The service owns local accounts and revocable sessions; it does not store estimate records. Registration returns the same accepted response for new, existing, and verified addresses; it creates no usable password or session. The mailbox owner sets the initial password while completing the single-use verification link, which creates the first session; unverified accounts cannot sign in. Session renewal rotates the opaque token and preserves a 30-day absolute session-family lifetime. Email must be verified before the BFF may issue a private-record service token, and Go independently requires email_verified=true on that token. Verification tokens expire after 24 hours and password-recovery tokens after 30 minutes; both are single-use and stored only as SHA-256 digests. Recovery requests do not disclose whether an account exists, and successful resets revoke all account sessions. Email is sent through an internal mailer using certificate-verified STARTTLS. With IDENTITY_EMAIL_MODE=disabled, email actions return a generic unavailable response and private-record access remains blocked."
   },
   "servers": [
     {
@@ -50,7 +50,7 @@
     "/v1/accounts": {
       "post": {
         "operationId": "createAccount",
-        "summary": "Create an account and its first session",
+        "summary": "Create an unverified account and request a verification email",
         "security": [{ "serviceSecret": [] }],
         "requestBody": {
           "required": true,
@@ -61,16 +61,16 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "An unverified account and its first session were created. The BFF requests email verification; private-record access remains blocked until verification completes.",
+          "202": {
+            "description": "The verification request was accepted. Account existence is not disclosed; the mailbox owner must complete verification and set the initial password before signing in.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/SessionCreated" }
+                "schema": { "$ref": "#/components/schemas/VerificationRequestAccepted" }
               }
             }
           },
           "400": { "description": "The account request is invalid." },
-          "409": { "description": "The account could not be created with these details." },
+          "429": { "description": "Verification requests are temporarily limited." },
           "503": { "description": "Identity storage is temporarily unavailable." }
         }
       }
@@ -158,7 +158,7 @@
       "post": {
         "operationId": "requestEmailVerification",
         "summary": "Send a verification message to the signed-in account",
-        "description": "The service derives the destination from the authenticated account; callers cannot supply another address. Requests are throttled. The response does not include a verification token.",
+        "description": "The service derives the destination from the authenticated account; callers cannot supply another address. Requests are throttled. A single-use token expires after 24 hours and is stored only as a SHA-256 digest. The response does not include a verification token.",
         "security": [{ "serviceSecret": [], "sessionBearer": [] }],
         "responses": {
           "202": { "description": "The request was accepted for delivery." },
@@ -171,7 +171,7 @@
     "/v1/email-verifications/complete": {
       "post": {
         "operationId": "completeEmailVerification",
-        "summary": "Verify an account email using a single-use token",
+        "summary": "Verify an email, set the initial password, and create the first session",
         "security": [{ "serviceSecret": [] }],
         "requestBody": {
           "required": true,
@@ -182,7 +182,14 @@
           }
         },
         "responses": {
-          "204": { "description": "The token was valid and the account email is verified." },
+          "200": {
+            "description": "The token was valid, the mailbox owner set the initial password, and the first session was created.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/SessionCreated" }
+              }
+            }
+          },
           "400": { "description": "The token is invalid, expired, or already used." },
           "503": { "description": "Identity storage is temporarily unavailable." }
         }
@@ -214,7 +221,7 @@
       "post": {
         "operationId": "completePasswordRecovery",
         "summary": "Replace a password using a single-use recovery token",
-        "description": "A successful reset consumes the token and revokes every active session for the account in the same transaction.",
+        "description": "The single-use token expires after 30 minutes. A successful reset consumes it, replaces the Argon2id password hash, and revokes every active session for the account in the same transaction.",
         "security": [{ "serviceSecret": [] }],
         "requestBody": {
           "required": true,
@@ -258,14 +265,21 @@
           "emailVerified": { "type": "boolean" }
         }
       },
+      "VerificationRequestAccepted": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["verificationRequired"],
+        "properties": {
+          "verificationRequired": { "const": true }
+        }
+      },
       "CreateAccount": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["email", "displayName", "password"],
+        "required": ["email", "displayName"],
         "properties": {
           "email": { "type": "string", "format": "email", "maxLength": 254 },
-          "displayName": { "type": "string", "minLength": 1, "maxLength": 100 },
-          "password": { "type": "string", "minLength": 12, "maxLength": 1024 }
+          "displayName": { "type": "string", "minLength": 1, "maxLength": 100 }
         }
       },
       "CreateSession": {
@@ -280,9 +294,10 @@
       "CompleteEmailVerification": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["token"],
+        "required": ["token", "newPassword"],
         "properties": {
-          "token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" }
+          "token": { "type": "string", "pattern": "^[A-Za-z0-9_-]{43}$" },
+          "newPassword": { "type": "string", "minLength": 12, "maxLength": 1024 }
         }
       },
       "PasswordRecoveryRequest": {

@@ -1,0 +1,35 @@
+services:
+  identity:
+    environment:
+      IDENTITY_EMAIL_MODE: smtp
+      IDENTITY_PUBLIC_BASE_URL: http://localhost:3000
+      IDENTITY_SMTP_HOST: mailpit
+      IDENTITY_SMTP_PORT: "1025"
+      IDENTITY_SMTP_FROM: no-reply@the-estimator.local
+      IDENTITY_SMTP_USERNAME: estimator-local
+      IDENTITY_SMTP_PASSWORD: ${MAILPIT_SMTP_PASSWORD:?Set MAILPIT_SMTP_PASSWORD in ignored .env.local}
+      IDENTITY_SMTP_CA_FILE: /run/mailpit/mailpit.crt
+    volumes:
+      - ./.local/mailpit:/run/mailpit:ro
+    depends_on:
+      mailpit:
+        condition: service_started
+
+  mailpit:
+    image: ghcr.io/axllent/mailpit:v1.31.5
+    command:
+      - --smtp
+      - 0.0.0.0:1025
+      - --ui
+      - 0.0.0.0:8025
+      - --smtp-tls-cert
+      - /tls/mailpit.crt
+      - --smtp-tls-key
+      - /tls/mailpit.key
+      - --smtp-require-starttls
+    environment:
+      MP_SMTP_AUTH: estimator-local:${MAILPIT_SMTP_PASSWORD:?Set MAILPIT_SMTP_PASSWORD in ignored .env.local}
+    volumes:
+      - ./.local/mailpit:/tls:ro
+    ports:
+      - "127.0.0.1:8025:8025"

@@ -11,9 +11,11 @@ import (
 	"encoding/hex"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"net/mail"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -26,27 +28,42 @@ import (
 )
 
 const (
-	argonMemoryKiB     = 19 * 1024
-	argonIterations    = 2
-	argonParallelism   = 1
-	argonKeyBytes      = 32
-	argonSaltBytes     = 16
-	sessionTokenBytes  = 32
-	sessionAbsoluteTTL = 30 * 24 * time.Hour
+	argonMemoryKiB       = 19 * 1024
+	argonIterations      = 2
+	argonParallelism     = 1
+	argonKeyBytes        = 32
+	argonSaltBytes       = 16
+	sessionTokenBytes    = 32
+	sessionAbsoluteTTL   = 30 * 24 * time.Hour
+	verificationTokenTTL = 24 * time.Hour
+	recoveryTokenTTL     = 30 * time.Minute
+)
+
+const (
+	verificationPurpose = "email_verification"
+	recoveryPurpose     = "password_recovery"
 )
 
 type identityStore struct {
-	pool       *pgxpool.Pool
-	bffSecret  []byte
-	sessionTTL time.Duration
-	dummySalt  []byte
-	dummyHash  []byte
+	pool          *pgxpool.Pool
+	bffSecret     []byte
+	sessionTTL    time.Duration
+	dummySalt     []byte
+	dummyHash     []byte
+	emailMode     string
+	emailSender   emailSender
+	publicBaseURL string
+}
+
+type emailSender interface {
+	Send(context.Context, string, string, string) error
 }
 
 type account struct {
-	ID          string `json:"accountId"`
-	Email       string `json:"email"`
-	DisplayName string `json:"displayName"`
+	ID            string `json:"accountId"`
+	Email         string `json:"email"`
+	DisplayName   string `json:"displayName"`
+	EmailVerified bool   `json:"emailVerified"`
 }
 
 type authResponse struct {
@@ -57,7 +74,6 @@ type authResponse struct {
 
 type registerRequest struct {
 	Email       string `json:"email"`
-	Password    string `json:"password"`
 	DisplayName string `json:"displayName"`
 }
 
@@ -71,6 +87,28 @@ func openIdentityStore(migrations embed.FS) (*identityStore, error) {
 	bffSecret := strings.TrimSpace(os.Getenv("IDENTITY_BFF_SHARED_SECRET"))
 	if databaseURL == "" || len([]byte(bffSecret)) < 32 {
 		return nil, errors.New("identity database and a 32-byte BFF secret are required")
+	}
+	emailMode := strings.TrimSpace(os.Getenv("IDENTITY_EMAIL_MODE"))
+	if emailMode == "" {
+		emailMode = "disabled"
+	}
+	if emailMode != "disabled" && emailMode != "smtp" {
+		return nil, errors.New("identity email mode must be disabled or smtp")
+	}
+	publicBaseURL := strings.TrimRight(strings.TrimSpace(os.Getenv("IDENTITY_PUBLIC_BASE_URL")), "/")
+	if publicBaseURL == "" {
+		publicBaseURL = "http://localhost:3000"
+	}
+	if !validPublicBaseURL(publicBaseURL) {
+		return nil, errors.New("identity public base URL must be HTTPS or localhost HTTP")
+	}
+	var sender emailSender
+	if emailMode == "smtp" {
+		configuredSender, err := newSMTPMailerFromEnvironment()
+		if err != nil {
+			return nil, err
+		}
+		sender = configuredSender
 	}
 	sessionTTL := 8 * time.Hour
 	if value := strings.TrimSpace(os.Getenv("IDENTITY_SESSION_TTL")); value != "" {
@@ -92,7 +130,7 @@ func openIdentityStore(migrations embed.FS) (*identityStore, error) {
 	if err != nil {
 		return nil, errors.New("identity database pool could not be started")
 	}
-	store := &identityStore{pool: pool, bffSecret: []byte(bffSecret), sessionTTL: sessionTTL}
+	store := &identityStore{pool: pool, bffSecret: []byte(bffSecret), sessionTTL: sessionTTL, emailMode: emailMode, emailSender: sender, publicBaseURL: publicBaseURL}
 	store.dummySalt = make([]byte, argonSaltBytes)
 	if _, err := rand.Read(store.dummySalt); err != nil {
 		pool.Close()
@@ -105,14 +143,25 @@ func openIdentityStore(migrations embed.FS) (*identityStore, error) {
 		pool.Close()
 		return nil, errors.New("identity database is not reachable")
 	}
-	schema, err := fs.ReadFile(migrations, "migrations/001_identity.sql")
+	entries, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
 		pool.Close()
 		return nil, errors.New("identity schema is unavailable")
 	}
-	if _, err := pool.Exec(ctx, string(schema)); err != nil {
-		pool.Close()
-		return nil, errors.New("identity schema could not be initialized")
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		schema, readErr := fs.ReadFile(migrations, "migrations/"+entry.Name())
+		if readErr != nil {
+			pool.Close()
+			return nil, errors.New("identity schema is unavailable")
+		}
+		if _, execErr := pool.Exec(ctx, string(schema)); execErr != nil {
+			pool.Close()
+			return nil, errors.New("identity schema could not be initialized")
+		}
 	}
 	return store, nil
 }
@@ -128,16 +177,24 @@ func (store *identityStore) registerAccount(w http.ResponseWriter, r *http.Reque
 	}
 	email, err := normalizeEmail(input.Email)
 	displayName := strings.TrimSpace(input.DisplayName)
-	if err != nil || len(displayName) == 0 || utf8.RuneCountInString(displayName) > 100 || !validPassword(input.Password) {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid email, display name, and password of at least 12 characters."})
+	if err != nil || len(displayName) == 0 || utf8.RuneCountInString(displayName) > 100 {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Provide a valid email address and display name."})
 		return
 	}
 	salt := make([]byte, argonSaltBytes)
+	placeholder := make([]byte, sessionTokenBytes)
 	if _, err := rand.Read(salt); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The account could not be created."})
 		return
 	}
-	hash := argon2.IDKey([]byte(input.Password), salt, argonIterations, argonMemoryKiB, argonParallelism, argonKeyBytes)
+	if _, err := rand.Read(placeholder); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The account could not be created."})
+		return
+	}
+	hash := argon2.IDKey(placeholder, salt, argonIterations, argonMemoryKiB, argonParallelism, argonKeyBytes)
+	for i := range placeholder {
+		placeholder[i] = 0
+	}
 	accountID, err := newUUID()
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The account could not be created."})
@@ -145,31 +202,59 @@ func (store *identityStore) registerAccount(w http.ResponseWriter, r *http.Reque
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
 	defer cancel()
+	if store.emailMode == "smtp" {
+		retryAfter, limitErr := store.consumeLifecycleAttempt(ctx, "verification_request", email, 3, 15*time.Minute, 15*time.Minute)
+		if limitErr != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+			return
+		}
+		retryAfter, limitErr = store.consumeLifecycleAttempt(ctx, "verification_network", requestRateKey(r), 10, 15*time.Minute, 15*time.Minute)
+		if limitErr != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
+			return
+		}
+		if retryAfter > 0 {
+			w.Header().Set("retry-after", strconv.Itoa(retryAfter))
+			writeJSON(w, http.StatusTooManyRequests, map[string]string{"error": "Verification requests are temporarily limited."})
+			return
+		}
+	}
 	tx, err := store.pool.Begin(ctx)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
 		return
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	_, err = tx.Exec(ctx, `INSERT INTO identity_accounts (id, email_normalized, display_name, password_salt, password_hash) VALUES ($1, $2, $3, $4, $5)`, accountID, email, displayName, salt, hash)
+	_, err = tx.Exec(ctx, `INSERT INTO identity_accounts (id, email_normalized, display_name, password_salt, password_hash, password_set, email_verified) VALUES ($1, $2, $3, $4, $5, FALSE, FALSE)`, accountID, email, displayName, salt, hash)
 	if err != nil {
 		if isUniqueViolation(err) {
-			writeJSON(w, http.StatusConflict, map[string]string{"error": "An account could not be created with these details."})
+			_ = tx.Rollback(ctx)
+			if store.emailMode == "smtp" {
+				var existing account
+				var emailVerified bool
+				lookupErr := store.pool.QueryRow(ctx, `SELECT id::text, email_normalized, display_name, email_verified FROM identity_accounts WHERE email_normalized = $1`, email).Scan(&existing.ID, &existing.Email, &existing.DisplayName, &emailVerified)
+				if lookupErr == nil && !emailVerified {
+					if err := store.issueLifecycleToken(ctx, existing, verificationPurpose); err != nil {
+						slog.Warn("identity_verification_email_failed", "service", "identity-go", "reason", "delivery_unavailable")
+					}
+				}
+			}
+			writeJSON(w, http.StatusAccepted, map[string]bool{"verificationRequired": true})
 			return
 		}
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
-		return
-	}
-	result, err := store.createSessionForAccount(ctx, tx, account{ID: accountID, Email: email, DisplayName: displayName})
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "The account could not be created."})
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
 		return
 	}
-	writeJSON(w, http.StatusCreated, result)
+	if store.emailMode == "smtp" {
+		if err := store.issueLifecycleToken(ctx, account{ID: accountID, Email: email, DisplayName: displayName}, verificationPurpose); err != nil {
+			slog.Warn("identity_verification_email_failed", "service", "identity-go", "reason", "delivery_unavailable")
+		}
+	}
+	writeJSON(w, http.StatusAccepted, map[string]bool{"verificationRequired": true})
 }
 
 func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request) {
@@ -196,7 +281,8 @@ func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request
 	}
 	var result account
 	var salt, storedHash []byte
-	err = store.pool.QueryRow(ctx, `SELECT id::text, email_normalized, display_name, password_salt, password_hash FROM identity_accounts WHERE email_normalized = $1`, email).Scan(&result.ID, &result.Email, &result.DisplayName, &salt, &storedHash)
+	var passwordSet bool
+	err = store.pool.QueryRow(ctx, `SELECT id::text, email_normalized, display_name, password_salt, password_hash, email_verified, password_set FROM identity_accounts WHERE email_normalized = $1`, email).Scan(&result.ID, &result.Email, &result.DisplayName, &salt, &storedHash, &result.EmailVerified, &passwordSet)
 	if errors.Is(err, pgx.ErrNoRows) {
 		dummy := argon2.IDKey([]byte(input.Password), store.dummySalt, argonIterations, argonMemoryKiB, argonParallelism, argonKeyBytes)
 		_ = subtle.ConstantTimeCompare(dummy, store.dummyHash)
@@ -208,7 +294,7 @@ func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request
 		return
 	}
 	computed := argon2.IDKey([]byte(input.Password), salt, argonIterations, argonMemoryKiB, argonParallelism, uint32(len(storedHash)))
-	if subtle.ConstantTimeCompare(computed, storedHash) != 1 {
+	if subtle.ConstantTimeCompare(computed, storedHash) != 1 || !passwordSet || !result.EmailVerified {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "The email or password is incorrect."})
 		return
 	}
@@ -216,9 +302,13 @@ func (store *identityStore) createSession(w http.ResponseWriter, r *http.Request
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Identity storage is temporarily unavailable."})
 		return
 	}
-	response, err := store.createSessionForAccount(ctx, store.pool, result)
+	response, valid, err := store.createSessionForCurrentCredentials(ctx, result.ID, salt, storedHash)
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "A sign-in session could not be created."})
+		return
+	}
+	if !valid {
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "The email or password is incorrect."})
 		return
 	}
 	writeJSON(w, http.StatusCreated, response)
@@ -234,7 +324,7 @@ func (store *identityStore) currentSession(w http.ResponseWriter, r *http.Reques
 	defer cancel()
 	var result account
 	var expiresAt time.Time
-	err := store.pool.QueryRow(ctx, `SELECT a.id::text, a.email_normalized, a.display_name, s.expires_at FROM identity_sessions s JOIN identity_accounts a ON a.id = s.account_id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now()`, hashSession(token)).Scan(&result.ID, &result.Email, &result.DisplayName, &expiresAt)
+	err := store.pool.QueryRow(ctx, `SELECT a.id::text, a.email_normalized, a.display_name, a.email_verified, s.expires_at FROM identity_sessions s JOIN identity_accounts a ON a.id = s.account_id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND a.email_verified = TRUE AND a.password_set = TRUE`, hashSession(token)).Scan(&result.ID, &result.Email, &result.DisplayName, &result.EmailVerified, &expiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in to continue."})
 		return
@@ -263,7 +353,7 @@ func (store *identityStore) renewSession(w http.ResponseWriter, r *http.Request)
 
 	var result account
 	var absoluteExpiresAt time.Time
-	err = tx.QueryRow(ctx, `SELECT a.id::text, a.email_normalized, a.display_name, s.absolute_expires_at FROM identity_sessions s JOIN identity_accounts a ON a.id = s.account_id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND s.absolute_expires_at > now() + interval '1 minute' FOR UPDATE OF s`, hashSession(token)).Scan(&result.ID, &result.Email, &result.DisplayName, &absoluteExpiresAt)
+	err = tx.QueryRow(ctx, `SELECT a.id::text, a.email_normalized, a.display_name, a.email_verified, s.absolute_expires_at FROM identity_sessions s JOIN identity_accounts a ON a.id = s.account_id WHERE s.token_hash = $1 AND s.revoked_at IS NULL AND s.expires_at > now() AND s.absolute_expires_at > now() + interval '1 minute' AND a.email_verified = TRUE AND a.password_set = TRUE FOR UPDATE OF s`, hashSession(token)).Scan(&result.ID, &result.Email, &result.DisplayName, &result.EmailVerified, &absoluteExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "Sign in to continue."})
 		return
@@ -324,6 +414,37 @@ func (store *identityStore) revokeSession(w http.ResponseWriter, r *http.Request
 
 type sessionExecutor interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func (store *identityStore) createSessionForCurrentCredentials(ctx context.Context, accountID string, expectedSalt, expectedHash []byte) (authResponse, bool, error) {
+	tx, err := store.pool.Begin(ctx)
+	if err != nil {
+		return authResponse{}, false, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+
+	var owner account
+	var currentSalt, currentHash []byte
+	var passwordSet bool
+	err = tx.QueryRow(ctx, `/* identity_signin_lock */ SELECT id::text, email_normalized, display_name, password_salt, password_hash, email_verified, password_set FROM identity_accounts WHERE id = $1 FOR UPDATE`, accountID).Scan(&owner.ID, &owner.Email, &owner.DisplayName, &currentSalt, &currentHash, &owner.EmailVerified, &passwordSet)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return authResponse{}, false, nil
+	}
+	if err != nil {
+		return authResponse{}, false, err
+	}
+	if !owner.EmailVerified || !passwordSet || subtle.ConstantTimeCompare(currentSalt, expectedSalt) != 1 || subtle.ConstantTimeCompare(currentHash, expectedHash) != 1 {
+		return authResponse{}, false, nil
+	}
+
+	response, err := store.createSessionForAccount(ctx, tx, owner)
+	if err != nil {
+		return authResponse{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return authResponse{}, false, err
+	}
+	return response, true, nil
 }
 
 func (store *identityStore) createSessionForAccount(ctx context.Context, executor sessionExecutor, owner account) (authResponse, error) {

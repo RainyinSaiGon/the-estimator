@@ -28,8 +28,8 @@ export default async function SignInPage({ searchParams }: { searchParams: Promi
       <div>
         <p className="text-xs font-medium uppercase tracking-[.2em] text-[var(--muted)]">First-party account preview</p>
         <h1 className="mt-5 max-w-md text-4xl font-medium leading-tight tracking-[-.045em] md:text-5xl">A private place for every estimate.</h1>
-        <p className="mt-5 max-w-md leading-7 text-[var(--muted)]">Create an account to prove the new identity service locally. Your browser receives only a protected session cookie; account credentials stay on the server.</p>
-        <p className="mt-6 max-w-md rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-950">Prototype only. Email verification, password recovery and MFA are not implemented. Use a unique demo password; do not reuse a password from another service.</p>
+        <p className="mt-5 max-w-md leading-7 text-[var(--muted)]">Create an account, verify your email, and set your password. Your browser receives a protected session only after you complete the mailbox step.</p>
+        <p className="mt-6 max-w-md rounded-xl border border-amber-200 bg-amber-50 p-4 text-xs leading-5 text-amber-950">Local preview only. Email verification and password recovery need the optional local SMTP configuration. Use a unique demo password; do not reuse a password from another service.</p>
       </div>
       <div className="rounded-[1.75rem] border border-[var(--line)] bg-white p-6 shadow-sm md:p-9">
         {configured

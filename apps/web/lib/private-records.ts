@@ -61,11 +61,14 @@ async function serviceAuthorization(scope: string): Promise<string | Response> {
   if (!session) {
     return noStore({ error: "Sign in to access your private workspace." }, 401);
   }
+  if (!session.account.emailVerified) {
+    return noStore({ error: "Verify your email before accessing private records." }, 403);
+  }
 
-  return serviceToken(key, { identity_authority: "first-party-v1" }, session.account.accountId, scope);
+  return serviceToken(key, { identity_authority: "first-party-v1", email_verified: true }, session.account.accountId, scope);
 }
 
-async function serviceToken(key: { keyID: string; secret: string }, claims: Record<string, string>, subject: string, scope: string) {
+async function serviceToken(key: { keyID: string; secret: string }, claims: Record<string, string | boolean>, subject: string, scope: string) {
   const token = await new SignJWT({ ...claims, scope })
     .setProtectedHeader({ alg: "HS256", typ: "JWT", kid: key.keyID })
     .setIssuer("the-estimator-web")
