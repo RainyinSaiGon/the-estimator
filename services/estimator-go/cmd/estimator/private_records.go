@@ -292,7 +292,7 @@ func verifyServiceToken(token string, keys map[string][]byte, requiredScope stri
 	if err != nil || parsed == nil || !parsed.Valid {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
-	if claims.IssuedAt == nil || claims.ExpiresAt == nil || !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) || claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time) > 60*time.Second || len(claims.Audience) != 1 || claims.Audience[0] != "the-estimator-go" || claims.ID == "" || len(claims.ID) > 128 || claims.Scope != requiredScope || claims.IdentityAuthority != "first-party-v1" || len(claims.OwnerID) > 0 || !isUUID(claims.Subject) {
+	if claims.IssuedAt == nil || claims.ExpiresAt == nil || !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) || claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time) > 60*time.Second || len(claims.Audience) != 1 || claims.Audience[0] != "the-estimator-go" || claims.ID == "" || len(claims.ID) > 128 || claims.Scope != requiredScope || claims.IdentityAuthority != "first-party-v1" || !claims.EmailVerified || len(claims.OwnerID) > 0 || !isUUID(claims.Subject) {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
 	return recordPrincipal{issuer: claims.IdentityAuthority, subject: claims.Subject}, nil
@@ -300,6 +300,7 @@ func verifyServiceToken(token string, keys map[string][]byte, requiredScope stri
 
 type recordServiceClaims struct {
 	IdentityAuthority string          `json:"identity_authority"`
+	EmailVerified     bool            `json:"email_verified"`
 	Scope             string          `json:"scope"`
 	OwnerID           json.RawMessage `json:"owner_id"`
 	jwt.RegisteredClaims

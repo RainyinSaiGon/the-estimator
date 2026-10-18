@@ -45,7 +45,18 @@ docker compose -p estimator-private-preview --env-file .env.local -f compose.yam
 
 Only the web app is published on loopback. `WEB_PORT` defaults to `3002` in this example so it can run beside the standard preview. Each saved version keeps the original suggestion, reviewed scope, source, uploaded original file (when present), and confirmed estimate as one AES-256-GCM encrypted snapshot. Titles and source content are encrypted; database metadata is limited to random IDs, a keyed owner index, timestamps, and schema version. Version 1 reserves a nullable delivery outcome for the later delivery-history phase. Users can open, delete one estimate, or delete their workspace; expired records are hidden immediately and purged every six hours. Retention defaults to 90 days and is bounded to 1–3650 days.
 
-The local legacy provider migration path has been removed. The single old local encrypted record was deleted at the owner’s request; no hosted Site or D1 data was changed. The first-party prototype has database-backed account-level sign-in throttling, but no verified email, account recovery, MFA, IP/registration abuse limits, or security monitoring. It does not import Sites/D1 workspaces and does not change production routing or the judge URL. Do not use real client data or rotate the content/index keys without a planned migration.
+The local legacy provider migration path has been removed. The single old local encrypted record was deleted at the owner’s request; no hosted Site or D1 data was changed. Registration creates an unverified account without a usable password or session. The mailbox owner sets the initial password while completing the verification link; only then is a session created. Email recovery is implemented, and the BFF plus Go record service both require a verified email before private-record access. Recovery tokens are single-use, expire after 30 minutes, and a successful password reset revokes every session. Email delivery is disabled by default; in that mode email actions fail closed and private records remain unavailable. This prototype does not import Sites/D1 workspaces, provide MFA, or change production routing or the judge URL. Do not use real client data or rotate the content/index keys without a planned migration.
+
+To exercise verification and recovery locally, add a distinct `MAILPIT_SMTP_PASSWORD` to the ignored root `.env.local`, then generate a local certificate and run the SMTP overlay:
+
+```powershell
+.\scripts\generate-mailpit-certificate.ps1
+docker compose -p estimator-private-preview --env-file .env.local -f compose.yaml -f compose.identity.yaml -f compose.private-records.yaml -f compose.identity-mailpit.yaml up --build
+```
+
+The optional Mailpit inbox is available at `http://127.0.0.1:8025`. The SMTP service is internal to Compose, requires STARTTLS, and its certificate is verified by the identity service using the local certificate authority file. Generated certificate and key files live under ignored `.local/mailpit/`; do not commit them. The default preview never delivers real email.
+
+For the lifecycle integration check, use a disposable PostgreSQL database, set `IDENTITY_TEST_DATABASE_URL` for the test process, and run `go test ./cmd/identity` from `services/identity-go`. The test creates synthetic accounts, exercises verification, recovery, expiry, reuse, throttling, response parity, and session revocation, then deletes only those synthetic accounts.
 
 For a local AI run, point Compose at an ignored file that contains `OPENAI_API_KEY` (the root `.env.local` is the local configuration file when present). The key is passed only to the Python service at runtime; it is not copied into the web container or image:
 

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { accountForSession, identityAuthConfigured } from "../../lib/identity";
+import EmailVerificationAction from "./email-verification-action";
 
 export const dynamic = "force-dynamic";
 
@@ -19,9 +20,11 @@ export default async function AccountPage() {
       <dl className="mt-8 divide-y divide-[var(--line)] border-y border-[var(--line)]">
         <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Display name</dt><dd className="text-sm">{session.account.displayName}</dd></div>
         <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Email</dt><dd className="text-sm">{session.account.email}</dd></div>
+        <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Email status</dt><dd className="text-sm">{session.account.emailVerified ? "Verified" : "Not verified"}</dd></div>
         <div className="grid gap-1 py-4 sm:grid-cols-[10rem_1fr]"><dt className="text-xs uppercase tracking-wider text-[var(--muted)]">Session ends</dt><dd className="text-sm">{new Date(session.expiresAt).toLocaleString()}</dd></div>
       </dl>
       <p className="mt-6 rounded-xl bg-[var(--paper)] p-4 text-xs leading-5 text-[var(--muted)]">This account controls the first-party session used to access your private estimates. Signing out revokes this browser session.</p>
+      {!session.account.emailVerified && <div className="mt-5 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm leading-6 text-amber-950"><p>Verify your email before using private workspace records.</p><EmailVerificationAction /></div>}
       <div className="mt-6 flex flex-wrap gap-3">
         <form action="/api/auth/renew" method="post"><button className="rounded-full bg-[var(--ink)] px-5 py-3 text-sm text-white transition hover:opacity-90">Renew session</button></form>
         <form action="/api/auth/logout" method="post"><button className="rounded-full border border-[var(--line)] px-5 py-3 text-sm transition hover:bg-[var(--paper)]">Sign out</button></form>

@@ -78,6 +78,8 @@ func TestVerifyServiceTokenRejectsInvalidIdentityClaims(t *testing.T) {
 	}{
 		{name: "wrong issuer", overrides: map[string]any{"iss": "other-service"}},
 		{name: "wrong identity authority", overrides: map[string]any{"identity_authority": "oidc"}},
+		{name: "missing verified-email claim", overrides: map[string]any{"email_verified": nil}},
+		{name: "unverified account", overrides: map[string]any{"email_verified": false}},
 		{name: "client-selected owner claim", overrides: map[string]any{"owner_id": "11111111-1111-4111-8111-111111111111"}},
 		{name: "empty owner claim is still forbidden", overrides: map[string]any{"owner_id": ""}},
 		{name: "extra audience", overrides: map[string]any{"aud": []string{"the-estimator-go", "another-service"}}},
@@ -162,6 +164,7 @@ func signedRecordServiceTokenWithClaims(t *testing.T, keyID string, includeKeyID
 		"aud":                audience,
 		"sub":                "0e7f3f96-7c9a-4db6-9a8d-35fe35ac9bce",
 		"identity_authority": "first-party-v1",
+		"email_verified":     true,
 		"scope":              scope,
 		"iat":                now.Unix(),
 		"exp":                expiration,

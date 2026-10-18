@@ -6,6 +6,7 @@ export type IdentityAccount = {
   accountId: string;
   email: string;
   displayName: string;
+  emailVerified: boolean;
 };
 
 type IdentityConfiguration = {
@@ -63,9 +64,10 @@ function parseAccount(value: unknown): IdentityAccount | null {
     typeof item.accountId !== "string" ||
     !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(item.accountId) ||
     typeof item.email !== "string" ||
-    typeof item.displayName !== "string"
+    typeof item.displayName !== "string" ||
+    typeof item.emailVerified !== "boolean"
   ) return null;
-  return { accountId: item.accountId, email: item.email, displayName: item.displayName };
+  return { accountId: item.accountId, email: item.email, displayName: item.displayName, emailVerified: item.emailVerified };
 }
 
 export async function accountForSession(token?: string): Promise<{ account: IdentityAccount; expiresAt: string } | null> {
