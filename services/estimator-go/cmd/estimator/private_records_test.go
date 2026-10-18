@@ -68,6 +68,33 @@ func TestVerifyServiceTokenRejectsLegacyKeyWhenNotConfigured(t *testing.T) {
 	}
 }
 
+func TestVerifyServiceTokenRejectsInvalidIdentityClaims(t *testing.T) {
+	now := time.Unix(1_800_000_000, 0)
+	secret := []byte("active-service-token-key-0123456789")
+	keys := map[string][]byte{"active": secret}
+	tests := []struct {
+		name      string
+		overrides map[string]any
+	}{
+		{name: "wrong issuer", overrides: map[string]any{"iss": "other-service"}},
+		{name: "wrong identity authority", overrides: map[string]any{"identity_authority": "oidc"}},
+		{name: "client-selected owner claim", overrides: map[string]any{"owner_id": "11111111-1111-4111-8111-111111111111"}},
+		{name: "empty owner claim is still forbidden", overrides: map[string]any{"owner_id": ""}},
+		{name: "extra audience", overrides: map[string]any{"aud": []string{"the-estimator-go", "another-service"}}},
+		{name: "lifetime over 60 seconds", overrides: map[string]any{"exp": now.Unix() + 61}},
+		{name: "future issued at", overrides: map[string]any{"iat": now.Unix() + 1}},
+		{name: "missing token id", overrides: map[string]any{"jti": ""}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			token := signedRecordServiceTokenWithClaims(t, "active", true, secret, now, "private-records:read", "the-estimator-go", now.Unix()+60, test.overrides)
+			if _, err := verifyServiceToken(token, keys, "private-records:read", now); err == nil {
+				t.Fatal("expected invalid identity claims to be rejected")
+			}
+		})
+	}
+}
+
 func TestConfiguredServiceTokenKeysValidatesRotationRing(t *testing.T) {
 	active := "active-service-token-key-0123456789"
 	previous := "previous-service-token-key-012345678"
@@ -121,6 +148,10 @@ func TestRequiredRecordScope(t *testing.T) {
 }
 
 func signedRecordServiceToken(t *testing.T, keyID string, includeKeyID bool, secret []byte, now time.Time, scope string, audience any, expiration int64) string {
+	return signedRecordServiceTokenWithClaims(t, keyID, includeKeyID, secret, now, scope, audience, expiration, nil)
+}
+
+func signedRecordServiceTokenWithClaims(t *testing.T, keyID string, includeKeyID bool, secret []byte, now time.Time, scope string, audience any, expiration int64, overrides map[string]any) string {
 	t.Helper()
 	header := map[string]string{"alg": "HS256", "typ": "JWT"}
 	if includeKeyID {
@@ -135,6 +166,9 @@ func signedRecordServiceToken(t *testing.T, keyID string, includeKeyID bool, sec
 		"iat":                now.Unix(),
 		"exp":                expiration,
 		"jti":                "test-token-id",
+	}
+	for key, value := range overrides {
+		claims[key] = value
 	}
 	headerBytes, err := json.Marshal(header)
 	if err != nil {

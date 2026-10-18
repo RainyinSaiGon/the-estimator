@@ -22,6 +22,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -38,8 +39,8 @@ type recordStore struct {
 }
 
 type recordPrincipal struct {
-	issuer         string
-	subject        string
+	issuer  string
+	subject string
 }
 
 type recordPayload struct {
@@ -262,81 +263,46 @@ func (store *recordStore) authorize(w http.ResponseWriter, r *http.Request) (rec
 }
 
 func verifyServiceToken(token string, keys map[string][]byte, requiredScope string, now time.Time) (recordPrincipal, error) {
-	parts := strings.Split(token, ".")
-	if len(parts) != 3 || len(parts[0]) > 2048 || len(parts[1]) > 8192 || len(parts[2]) > 256 {
+	if len(token) == 0 || len(token) > 10_000 {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
-	headerBytes, err := base64.RawURLEncoding.DecodeString(parts[0])
-	if err != nil {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	var header struct {
-		Algorithm string `json:"alg"`
-		Type      string `json:"typ"`
-		KeyID     string `json:"kid"`
-	}
-	if json.Unmarshal(headerBytes, &header) != nil || header.Algorithm != "HS256" || header.Type != "JWT" {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	keyID := header.KeyID
-	if keyID == "" {
-		keyID = "legacy"
-	}
-	secret, ok := keys[keyID]
-	if !ok {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	signature, err := base64.RawURLEncoding.DecodeString(parts[2])
-	if err != nil {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	mac := hmac.New(sha256.New, secret)
-	_, _ = mac.Write([]byte(parts[0] + "." + parts[1]))
-	if !hmac.Equal(signature, mac.Sum(nil)) {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	claimsBytes, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	decoder := json.NewDecoder(bytes.NewReader(claimsBytes))
-	decoder.UseNumber()
-	var claims map[string]any
-	if decoder.Decode(&claims) != nil || decoder.Decode(&struct{}{}) != io.EOF {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	issuer, _ := claims["iss"].(string)
-	subject, _ := claims["sub"].(string)
-	identityAuthority, _ := claims["identity_authority"].(string)
-	scope, _ := claims["scope"].(string)
-	jti, _ := claims["jti"].(string)
-	audienceOK := false
-	switch value := claims["aud"].(type) {
-	case string:
-		audienceOK = value == "the-estimator-go"
-	case []any:
-		for _, item := range value {
-			if item == "the-estimator-go" {
-				audienceOK = true
+	claims := &recordServiceClaims{}
+	parsed, err := jwt.ParseWithClaims(token, claims, func(parsed *jwt.Token) (any, error) {
+		if parsed.Method != jwt.SigningMethodHS256 || parsed.Header["typ"] != "JWT" {
+			return nil, errors.New("invalid token")
+		}
+		rawKeyID, exists := parsed.Header["kid"]
+		keyID := "legacy"
+		if exists {
+			var ok bool
+			keyID, ok = rawKeyID.(string)
+			if !ok {
+				return nil, errors.New("invalid token")
 			}
 		}
-	}
-	expiration, expOK := numericClaim(claims["exp"])
-	issuedAt, iatOK := numericClaim(claims["iat"])
-	unixNow := now.Unix()
-	notBeforeOK := true
-	if rawNotBefore, exists := claims["nbf"]; exists {
-		notBefore, ok := numericClaim(rawNotBefore)
-		notBeforeOK = ok && notBefore <= unixNow+30
-	}
-	if issuer != "the-estimator-web" || !audienceOK || !expOK || !iatOK || !notBeforeOK || expiration <= unixNow-30 || issuedAt > unixNow+30 || expiration <= issuedAt || expiration-issuedAt > 120 || subject == "" || len(subject) > 512 || jti == "" || len(jti) > 128 || scope != requiredScope {
+		if keyID == "" {
+			return nil, errors.New("invalid token")
+		}
+		secret, ok := keys[keyID]
+		if !ok {
+			return nil, errors.New("invalid token")
+		}
+		return secret, nil
+	}, jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}), jwt.WithIssuer("the-estimator-web"), jwt.WithAudience("the-estimator-go"), jwt.WithExpirationRequired(), jwt.WithIssuedAt(), jwt.WithTimeFunc(func() time.Time { return now }))
+	if err != nil || parsed == nil || !parsed.Valid {
 		return recordPrincipal{}, errors.New("invalid token")
 	}
+	if claims.IssuedAt == nil || claims.ExpiresAt == nil || !claims.ExpiresAt.Time.After(claims.IssuedAt.Time) || claims.ExpiresAt.Time.Sub(claims.IssuedAt.Time) > 60*time.Second || len(claims.Audience) != 1 || claims.Audience[0] != "the-estimator-go" || claims.ID == "" || len(claims.ID) > 128 || claims.Scope != requiredScope || claims.IdentityAuthority != "first-party-v1" || len(claims.OwnerID) > 0 || !isUUID(claims.Subject) {
+		return recordPrincipal{}, errors.New("invalid token")
+	}
+	return recordPrincipal{issuer: claims.IdentityAuthority, subject: claims.Subject}, nil
+}
 
-	if identityAuthority != "first-party-v1" || !isUUID(subject) {
-		return recordPrincipal{}, errors.New("invalid token")
-	}
-	return recordPrincipal{issuer: identityAuthority, subject: subject}, nil
+type recordServiceClaims struct {
+	IdentityAuthority string          `json:"identity_authority"`
+	Scope             string          `json:"scope"`
+	OwnerID           json.RawMessage `json:"owner_id"`
+	jwt.RegisteredClaims
 }
 
 func requiredRecordScope(method, path string) string {
@@ -401,15 +367,6 @@ func validServiceTokenKeyID(value string) bool {
 		}
 	}
 	return true
-}
-
-func numericClaim(value any) (int64, bool) {
-	number, ok := value.(json.Number)
-	if !ok {
-		return 0, false
-	}
-	parsed, err := number.Int64()
-	return parsed, err == nil
 }
 
 func (store *recordStore) listRecords(w http.ResponseWriter, r *http.Request, principal recordPrincipal) {

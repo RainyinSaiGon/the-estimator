@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "The Estimator preview APIs",
-    "version": "1.4.0",
+    "version": "1.5.0",
     "description": "Versioned contracts for the Next.js preview BFF, Python document-intake and agent-analysis service, and Go estimator. Local preview persistence is opt-in; private records use first-party account sessions and require identity, service authentication, PostgreSQL, and encryption configuration."
   },
   "paths": {
@@ -2674,7 +2674,18 @@
         "type": "http",
         "scheme": "bearer",
         "bearerFormat": "JWT",
-        "description": "Short-lived BFF-to-Go HS256 token. The protected header includes a key ID for rotation; the token carries one operation-specific private-records scope and is never issued to browser code."
+        "description": "Short-lived BFF-to-Go HS256 token. The protected header includes a key ID for rotation. Claims are iss=the-estimator-web, exactly aud=the-estimator-go, sub=<stable account UUID>, identity_authority=first-party-v1, jti, iat, exp (no more than 60 seconds after iat), and exactly the operation-specific scope declared on the route. owner_id is forbidden: Go derives record ownership only from sub. After the email lifecycle ships, the BFF may issue this token only for accounts with verified email. The token is never issued to browser code; Go validates it with a maintained JWT library and checks the route scope and owner mapping.",
+        "x-required-claims": [
+          "iss=the-estimator-web",
+          "aud=the-estimator-go (exactly one audience)",
+          "sub=<stable account UUID>",
+          "identity_authority=first-party-v1",
+          "jti=<non-empty token ID>",
+          "iat=<issued-at time>",
+          "exp=<expiry within 60 seconds of iat>",
+          "scope=<exact operation scope declared on route>",
+          "owner_id must be absent"
+        ]
       }
     }
   }

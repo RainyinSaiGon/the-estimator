@@ -18,14 +18,16 @@
 | Password guessing | Persistent account-keyed HMAC throttle; five attempts per ten-minute window then a ten-minute block; constant-work unknown-account verification | No edge/IP controls, registration throttling, or distributed abuse monitoring |
 | Stolen or replayed browser session | 256-bit opaque token; only SHA-256 digest stored; HttpOnly, SameSite cookie; idle and 30-day absolute expiry; rotation revokes the prior token; sign-out revokes the current token | No MFA, device management, or user-visible session inventory |
 | CSRF against state-changing browser routes | BFF checks request Origin against the request host; cross-site fetch metadata is rejected on record mutations | Deployment must preserve correct host/proxy headers and HTTPS settings |
-| Forged identity, wrong service, or over-broad service call | HS256 signature, issuer, audience, time bounds, stable internal account UUID, `kid`, and exact operation scope are checked by Go | Shared HMAC keys require secure distribution; there is no asymmetric key infrastructure or external rotation service |
+| Forged identity, wrong service, or over-broad service call | The maintained `golang-jwt/jwt/v5` parser enforces an HS256 allowlist, issuer, exactly one audience, expiry, and issue time; Go also checks the stable internal account UUID, `kid`, token lifetime (at most 60 seconds), and exact operation scope. `owner_id` claims are rejected so ownership comes only from `sub`. | Shared HMAC keys require secure distribution; there is no asymmetric key infrastructure or external rotation service. Email-verified token issuance is specified but awaits the P1 lifecycle implementation. |
 | Cross-account record access or overwrite | Go resolves owner identity server-side; list/read/title-update/delete queries are owner-scoped; record contents and titles use AES-256-GCM; owner indexes use a separate HMAC key; title rename leaves reviewed scope and estimate frozen | The two-account check is synthetic local evidence, not a penetration test or production data validation |
 | Sensitive values in logs or AI requests | Request logs omit bodies, cookies, tokens, and query strings; Python has no identity/record credentials | Operational log sinks and model-provider settings still need deployment review |
 | Database or service outage | Bounded requests, readiness checks, database connection limits, and generic errors | Backups, restore drills, and production incident response have not been exercised |
 
 ## Recovery and account lifecycle
 
-Email verification and password recovery are deliberately unavailable. There is no recovery endpoint or email-delivery provider configured, so a user who loses a local password cannot self-recover the account. Do not use the local preview for real client data or as a durable production account. Before enabling public registration, choose and review an email-delivery path, implement single-use expiring recovery tokens with uniform responses and throttling, and define verification, revocation, audit, and support procedures. Never provide recovery by matching an email address to a legacy provider account.
+The v1.1 contract and ADR define the intended lifecycle, but the email routes and verified-account gate are not implemented yet. Registration creates an unverified account; private-record service tokens must be withheld until the identity service reports a verified email. Verification tokens are single-use and expire after 24 hours. Recovery tokens are single-use and expire after 30 minutes; reset revokes every active session. Only token digests are persisted. Recovery request responses are uniform for known, unknown, and unverified addresses, and both flows are throttled.
+
+Email delivery is controlled by `IDENTITY_EMAIL_MODE=disabled|smtp`. `disabled` is local-preview-only: requests return a generic unavailable response and records stay blocked. `smtp` requires host, port, sender, and secret credentials and must use STARTTLS with certificate verification. The service must not reveal account existence if delivery is unavailable. Never recover an account by matching its email to a legacy provider account. Do not use the current prototype for real client data or as a durable production account.
 
 ## Key handling and rotation
 
@@ -43,7 +45,7 @@ The temporary OIDC compatibility and workspace-migration path has been removed f
 
 ## Production gates
 
-1. Define verified email and safe password recovery, registration and edge abuse controls, monitoring, account/session retention, backups, and restore procedures.
+1. Implement and locally verify the contracted email verification and password recovery flows, then add registration and edge abuse controls, monitoring, account/session retention, backups, and restore procedures.
 2. Independently review the identity, session, token, database, and key-management design; test failure and compromise recovery.
 3. Rehearse a documented legacy mapping and rollback using the actual retained legacy configuration and keys, without email-based linking.
 4. Re-run two-account isolation and session tests in the deployment environment, then seek separate approval before any hosted deployment or traffic change.
