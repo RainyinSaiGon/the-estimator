@@ -13,6 +13,7 @@ def scope_case(status="approved"):
             "requirements": [{"id": "import"}],
             "missingQuestions": [{"id": "api"}],
             "capabilityJudgments": [{"capability": "gateway", "label": "unsupported"}],
+            "risks": [{"id": "risk-1"}],
         },
     }
 
@@ -34,16 +35,32 @@ class EvaluationTests(unittest.TestCase):
     def test_scoping_metrics_include_explicit_denominators(self):
         case = scope_case()
         case["brief"] = "Please import contacts from a CSV. The portal API is unknown."
-        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2"]})
-        prediction = {"caseId": "case-1", "requirements": [{"id": "prediction-1", "evidence": "import contacts from a CSV"}], "coveredExpectedRequirementIds": ["import"], "predictedMissingQuestionCount": 1, "matchedMissingQuestionIds": ["api"], "capabilityJudgments": [{"capability": "gateway", "judgment": "supported"}], "reviewerCorrections": 2, "minutesToReviewableScope": 5}
+        review_labels = {"requirements": [{"id": "import"}], "missingQuestions": [{"id": "api"}], "capabilityJudgments": [{"capability": "gateway", "label": "unsupported"}], "risks": [{"id": "risk-1"}]}
+        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2", "reviewer-3"], "reviewRecords": [{"reviewerId": reviewer, "reviewedAt": "2026-10-18T11:00:00Z", "rubricVersion": "1.0", "expected": review_labels} for reviewer in ("reviewer-2", "reviewer-3")], "adjudicationNote": "No material disagreements."})
+        prediction = {"caseId": "case-1", "requirements": [{"id": "prediction-1", "evidence": "import contacts from a CSV"}], "coveredExpectedRequirementIds": ["import"], "predictedMissingQuestionCount": 1, "matchedMissingQuestionIds": ["api"], "predictedRiskCount": 2, "matchedRiskIds": ["risk-1"], "capabilityJudgments": [{"capability": "gateway", "judgment": "supported"}], "reviewerCorrections": 2, "minutesToReviewableScope": 5}
         result = evaluate_scope([case], [prediction])
         self.assertEqual(result["overall"]["requirementCoverage"], {"numerator": 1, "denominator": 1, "value": 1.0})
         self.assertEqual(result["overall"]["capabilityFalsePositiveRate"]["numerator"], 1)
+        self.assertEqual(result["overall"]["riskAgreement"]["recall"], {"numerator": 1, "denominator": 1, "value": 1.0})
+        self.assertEqual(result["overall"]["riskAgreement"]["precision"], {"numerator": 1, "denominator": 2, "value": 0.5})
         self.assertEqual(result["overall"]["sourceEvidenceSupport"]["denominator"], 1)
 
     def test_unapproved_scoping_examples_are_not_ground_truth(self):
         with self.assertRaisesRegex(ValueError, "no reviewer-approved cases"):
             evaluate_scope([scope_case("draft")], [])
+
+    def test_approved_scoping_case_requires_two_distinct_independent_reviewers(self):
+        case = scope_case()
+        case["approval"].update({"reviewerId": "reviewer-1", "approvedAt": "2026-10-18T12:00:00Z", "independentReviewers": ["reviewer-2"], "reviewRecords": [{"reviewerId": "reviewer-2", "reviewedAt": "2026-10-18T11:00:00Z", "rubricVersion": "1.0", "expected": case["expected"]}], "adjudicationNote": "No material disagreements."})
+        with self.assertRaisesRegex(ValueError, "two distinct independent reviewers"):
+            evaluate_scope([case], [])
+        case["approval"]["independentReviewers"] = ["reviewer-2", " reviewer-2 "]
+        with self.assertRaisesRegex(ValueError, "two distinct independent reviewers"):
+            evaluate_scope([case], [])
+        case["approval"]["independentReviewers"] = ["reviewer-2", "reviewer-3"]
+        case["approval"]["reviewRecords"] = [{"reviewerId": "reviewer-2", "reviewedAt": "2026-10-18T11:00:00Z", "rubricVersion": "1.0", "expected": case["expected"]}, {"reviewerId": "reviewer-2", "reviewedAt": "2026-10-18T11:05:00Z", "rubricVersion": "1.0", "expected": case["expected"]}]
+        with self.assertRaisesRegex(ValueError, "preserve labels"):
+            evaluate_scope([case], [])
 
     def test_delivery_holdout_excludes_training_and_added_scope(self):
         holdout_id = next(f"record-{index}" for index in range(100) if expected_split(f"record-{index}") == "holdout")
@@ -53,6 +70,11 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(recorded["count"], 1)
         self.assertEqual(recorded["adjustedAbsoluteError"]["mean"], 2)
         self.assertEqual(result["trainingRecordsExcluded"], 1)
+
+    def test_empty_delivery_export_reports_no_eligible_holdout(self):
+        result = evaluate_delivery([])
+        self.assertEqual(result["status"], "no_eligible_holdout")
+        self.assertEqual(result["holdout"], {})
 
     def test_synthetic_delivery_is_separately_reported_and_never_calibrated(self):
         record_id = next(f"synthetic-{index}" for index in range(100) if expected_split(f"synthetic-{index}") == "holdout")

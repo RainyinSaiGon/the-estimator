@@ -33,7 +33,7 @@ def normalized_text(value: str) -> str:
 
 def evaluate_group(cases: list[dict[str, Any]], predictions: dict[str, dict[str, Any]]) -> dict[str, Any]:
     evidence_supported = predicted_requirement_count = covered = expected_requirement_count = 0
-    missing_tp = missing_fp = missing_fn = capability_fp = unsupported_count = 0
+    missing_tp = missing_fp = missing_fn = risk_tp = risk_fp = risk_fn = capability_fp = unsupported_count = 0
     corrections: list[float] = []
     minutes: list[float] = []
     for case in cases:
@@ -50,13 +50,37 @@ def evaluate_group(cases: list[dict[str, Any]], predictions: dict[str, dict[str,
         covered += len(covered_ids)
         expected_requirement_count += len(expected_ids)
         gold_questions = {item["id"] for item in expected["missingQuestions"]}
-        matched_questions = set(prediction.get("matchedMissingQuestionIds", []))
-        predicted_question_count = prediction.get("predictedMissingQuestionCount", 0)
-        if not matched_questions <= gold_questions or predicted_question_count < len(matched_questions):
+        raw_matched_questions = prediction.get("matchedMissingQuestionIds", [])
+        matched_questions = set(raw_matched_questions) if isinstance(raw_matched_questions, list) else set()
+        predicted_question_count = prediction.get("predictedMissingQuestionCount")
+        if (
+            not isinstance(raw_matched_questions, list)
+            or len(matched_questions) != len(raw_matched_questions)
+            or not matched_questions <= gold_questions
+            or isinstance(predicted_question_count, bool)
+            or not isinstance(predicted_question_count, int)
+            or predicted_question_count < len(matched_questions)
+        ):
             raise ValueError(f"prediction {case['caseId']} has invalid missing-question matches or counts")
         missing_tp += len(matched_questions)
         missing_fp += predicted_question_count - len(matched_questions)
         missing_fn += len(gold_questions - matched_questions)
+        gold_risks = {item["id"] for item in expected.get("risks", [])}
+        raw_matched_risks = prediction.get("matchedRiskIds", [])
+        matched_risks = set(raw_matched_risks) if isinstance(raw_matched_risks, list) else set()
+        predicted_risk_count = prediction.get("predictedRiskCount")
+        if (
+            not isinstance(raw_matched_risks, list)
+            or len(matched_risks) != len(raw_matched_risks)
+            or not matched_risks <= gold_risks
+            or isinstance(predicted_risk_count, bool)
+            or not isinstance(predicted_risk_count, int)
+            or predicted_risk_count < len(matched_risks)
+        ):
+            raise ValueError(f"prediction {case['caseId']} has invalid risk matches or counts")
+        risk_tp += len(matched_risks)
+        risk_fp += predicted_risk_count - len(matched_risks)
+        risk_fn += len(gold_risks - matched_risks)
         predicted_capabilities = {item["capability"]: item["judgment"] for item in prediction.get("capabilityJudgments", [])}
         for expected_capability in expected["capabilityJudgments"]:
             if expected_capability["label"] == "unsupported":
@@ -77,6 +101,13 @@ def evaluate_group(cases: list[dict[str, Any]], predictions: dict[str, dict[str,
             "falsePositive": missing_fp,
             "falseNegative": missing_fn,
         },
+        "riskAgreement": {
+            "precision": ratio(risk_tp, risk_tp + risk_fp),
+            "recall": ratio(risk_tp, risk_tp + risk_fn),
+            "truePositive": risk_tp,
+            "falsePositive": risk_fp,
+            "falseNegative": risk_fn,
+        },
         "capabilityFalsePositiveRate": ratio(capability_fp, unsupported_count),
         "reviewerCorrections": {"sum": sum(corrections), "count": len(corrections), "mean": sum(corrections) / len(corrections) if corrections else None},
         "minutesToReviewableScope": {"sum": sum(minutes), "count": len(minutes), "mean": sum(minutes) / len(minutes) if minutes else None},
@@ -89,8 +120,38 @@ def evaluate(dataset: list[dict[str, Any]], predictions: list[dict[str, Any]]) -
         raise ValueError("no reviewer-approved cases; draft labels are never treated as ground truth")
     for case in approved:
         approval = case.get("approval", {})
-        if not isinstance(approval.get("reviewerId"), str) or not approval["reviewerId"].strip() or not approval.get("approvedAt") or not approval.get("rubricVersion") or not approval.get("independentReviewers"):
-            raise ValueError(f"approved case {case.get('caseId')} needs an attributable approval and an independent reviewer")
+        reviewers = approval.get("independentReviewers")
+        if (
+            not isinstance(approval.get("reviewerId"), str)
+            or not approval["reviewerId"].strip()
+            or not approval.get("approvedAt")
+            or not approval.get("rubricVersion")
+            or not isinstance(approval.get("adjudicationNote"), str)
+            or not approval["adjudicationNote"].strip()
+            or not isinstance(reviewers, list)
+            or len(reviewers) < 2
+            or any(not isinstance(reviewer, str) or not reviewer.strip() for reviewer in reviewers)
+            or len({reviewer.strip() for reviewer in reviewers}) != len(reviewers)
+        ):
+            raise ValueError(f"approved case {case.get('caseId')} needs an attributable approval and two distinct independent reviewers")
+        review_records = approval.get("reviewRecords")
+        if (
+            not isinstance(review_records, list)
+            or len(review_records) < 2
+            or any(
+                not isinstance(review, dict)
+                or not isinstance(review.get("reviewerId"), str)
+                or not review["reviewerId"].strip()
+                or not review.get("reviewedAt")
+                or not review.get("rubricVersion")
+                or not isinstance(review.get("expected"), dict)
+                for review in review_records
+            )
+            or len({review["reviewerId"].strip() for review in review_records}) != len(review_records)
+            or {review["reviewerId"].strip() for review in review_records}
+            != {reviewer.strip() for reviewer in reviewers}
+        ):
+            raise ValueError(f"approved case {case.get('caseId')} must preserve labels from its two distinct independent reviewers")
     case_ids = [case.get("caseId") for case in approved]
     if any(not isinstance(case_id, str) or not case_id for case_id in case_ids) or len(set(case_ids)) != len(case_ids):
         raise ValueError("approved case IDs must be non-empty and unique")
