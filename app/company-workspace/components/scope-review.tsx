@@ -8,7 +8,7 @@ import type {
   ScopeReview,
   WorkspaceResponse,
 } from "../../../lib/client-workflow-types";
-import { reviewForEditor, typeLabel, types } from "../request-presentation";
+import { typeLabel, types } from "../request-presentation";
 import type { ScopeReviewState } from "../review-state";
 import { button, Field, input, secondary, Section } from "../ui";
 import { QuestionReviewEditor } from "./review-editors";
@@ -25,6 +25,7 @@ type ScopeReviewPanelProps = {
   unsavedScope: boolean;
   reviewerQuestion: string;
   onReviewChange: Dispatch<SetStateAction<ScopeReview | null>>;
+  onDiscardChanges: () => void;
   onEditingChange: (value: boolean) => void;
   onReviewerQuestionChange: (value: string) => void;
   onQuestionResolutionChange: (key: string, value: QuestionResolution) => void;
@@ -46,6 +47,7 @@ export function ScopeReviewPanel({
   reviewerQuestion,
   onReviewChange,
   onEditingChange,
+  onDiscardChanges,
   onReviewerQuestionChange,
   onQuestionResolutionChange,
   onAction,
@@ -373,12 +375,10 @@ export function ScopeReviewPanel({
             </button>
             <button
               className={secondary}
-              onClick={() => {
-                onReviewChange(reviewForEditor(request, company.config.products));
-                onEditingChange(false);
-              }}
+              disabled={busy}
+              onClick={onDiscardChanges}
             >
-              Cancel
+              {unsavedScope || reviewerQuestion ? "Discard changes" : "Done"}
             </button>
           </>
         ) : (

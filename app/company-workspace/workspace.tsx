@@ -11,12 +11,11 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 import { extractClientFile } from "../../lib/browser-document-extraction";
 import type {
   ScopeReview,
   ScopeWorkPackage,
-  WorkspaceResponse,
 } from "../../lib/client-workflow-types";
 import { AnalysisFindings } from "./components/analysis-findings";
 import { CommitmentTrackingPanel } from "./components/commitment-tracking";
@@ -35,11 +34,13 @@ import {
   EvaluationPanel,
   MembersPanel,
 } from "./governance";
-import { reviewForEditor, typeLabel } from "./request-presentation";
+import { typeLabel } from "./request-presentation";
 import { getScopeReviewState } from "./review-state";
 import { button, card, Field, input, secondary, Section } from "./ui";
 import { api } from "./workspace-api";
 import { panels, settingsGroups, type Panel } from "./workspace-navigation";
+import { useWorkspaceController } from "./use-workspace-controller";
+import { useScopeReviewDrafts } from "./use-scope-review-drafts";
 
 export default function CompanyWorkspace({
   userName,
@@ -51,13 +52,11 @@ export default function CompanyWorkspace({
   publicDemo?: boolean;
 }) {
   const router = useRouter();
-  const [data, setData] = useState<WorkspaceResponse | null>(null);
+  const { data, companyId, requestId, setRequestId, selectCompany, load, run, busy, error, setError, notice, setNotice } = useWorkspaceController({ guest });
   const [panel, setPanel] = useState<Panel>("requests");
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsMenuRef = useRef<HTMLDivElement>(null);
   const settingsTriggerRef = useRef<HTMLButtonElement>(null);
-  const [companyId, setCompanyId] = useState("");
-  const [requestId, setRequestId] = useState("");
   const [requestView, setRequestView] = useState<"list" | "detail">("list");
   const requestFocus = useRef<{ id: string; section: string } | null>(null);
   const [requestOpenSequence, setRequestOpenSequence] = useState(0);
@@ -68,12 +67,8 @@ export default function CompanyWorkspace({
   const startRequestAfterCompany = useRef(
     typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1",
   );
-  const [busy, setBusy] = useState("");
-  const [error, setError] = useState("");
-  const [notice, setNotice] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
-  const [reviewerQuestion, setReviewerQuestion] = useState("");
   const [cohort, setCohort] = useState<"synthetic" | "recorded">("synthetic");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [processingUploads, setProcessingUploads] = useState(false);
@@ -84,44 +79,31 @@ export default function CompanyWorkspace({
     ? company?.requests.find((item) => item.cohort === "synthetic" && item.analysis)
     : undefined;
 
-  const [review, setReview] = useState<ScopeReview | null>(null);
+  const { review, setReview, dirty: dirtyReview, draftCount, serverChanged, discard: discardReviewDraft, captureSave, acknowledgeSave, reviewerQuestion, setReviewerQuestion } = useScopeReviewDrafts(companyId, request, company?.config.products);
   const [editorReady, setEditorReady] = useState("");
-  const [editing, setEditing] = useState(false);
-
-  const load = useCallback(
-    async (id?: string) => {
-      if (guest) return;
-      setBusy("load");
-      setError("");
-      try {
-        const next = await api(undefined, id || companyId || undefined);
-        setData(next);
-        const nextCompany = next.company;
-        setCompanyId(nextCompany?.id ?? "");
-        setRequestId((current) =>
-          nextCompany?.requests.some((item) => item.id === current) ? current : "",
-        );
-        if (nextCompany && startRequestAfterCompany.current) {
-          setPanel("requests");
-          setCreatingCompany(false);
-          setCreatingRequest(true);
-          setRequestId("");
-          setRequestView("detail");
-          startRequestAfterCompany.current = false;
-        }
-      } catch (cause) {
-        setError(cause instanceof Error ? cause.message : "Could not open company workspace.");
-      } finally {
-        setBusy("");
-      }
-    },
-    [companyId, guest],
-  );
+  const [editingByRequest, setEditingByRequest] = useState<Record<string, boolean>>({});
+  const reviewKey = `${companyId}:${requestId}`;
+  const editing = !!editingByRequest[reviewKey];
+  function setEditing(value: boolean) {
+    setEditingByRequest((current) => ({ ...current, [reviewKey]: value }));
+  }
 
   useEffect(() => {
     const timer = window.setTimeout(() => void load(), 0);
     return () => window.clearTimeout(timer);
   }, [load]);
+  useEffect(() => {
+    if (!company || !startRequestAfterCompany.current) return;
+    const timer = window.setTimeout(() => {
+      setPanel("requests");
+      setCreatingCompany(false);
+      setCreatingRequest(true);
+      setRequestId("");
+      setRequestView("detail");
+      startRequestAfterCompany.current = false;
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [company, setRequestId]);
   useEffect(() => {
     if (!settingsOpen) return;
     const items = [
@@ -173,26 +155,15 @@ export default function CompanyWorkspace({
     }
   }, []);
   useEffect(() => {
-    const focus = requestFocus.current;
     const timer = window.setTimeout(() => {
-      if (!request) {
-        setReview(null);
+      if (!requestId) {
         setEditorReady("");
-        setReviewerQuestion("");
         return;
       }
-      setReview(reviewForEditor(request, company?.config.products ?? []));
-      setEditing(
-        focus?.id === request.id &&
-          focus.section === "scope" &&
-          canEstimate &&
-          request.status !== "frozen",
-      );
-      setEditorReady(`${request.id}:${requestOpenSequence}`);
-      setReviewerQuestion("");
+      setEditorReady(`${requestId}:${requestOpenSequence}`);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [request, company?.config.products, requestOpenSequence, canEstimate]);
+  }, [requestId, requestOpenSequence]);
 
   useEffect(() => {
     const target = requestFocus.current;
@@ -217,6 +188,8 @@ export default function CompanyWorkspace({
   }, [panel, requestView, request, review, requestOpenSequence, editorReady]);
 
   function openRequest(id: string, action?: string) {
+    if (action === "Review scope" && canEstimate && company?.requests.find((item) => item.id === id)?.status !== "frozen")
+      setEditingByRequest((current) => ({ ...current, [`${companyId}:${id}`]: true }));
     requestFocus.current = {
       id,
       section:
@@ -235,37 +208,6 @@ export default function CompanyWorkspace({
     setCreatingRequest(false);
   }
 
-  async function run(name: string, work: () => Promise<WorkspaceResponse>) {
-    setBusy(name);
-    setError("");
-    setNotice("");
-    try {
-      const next = await work();
-      setData(next);
-      const nextCompany = next.company;
-      if (nextCompany) {
-        setCompanyId(nextCompany.id);
-        setRequestId((current) =>
-          nextCompany.requests.some((item) => item.id === current) ? current : "",
-        );
-        if (startRequestAfterCompany.current) {
-          setPanel("requests");
-          setCreatingCompany(false);
-          setCreatingRequest(true);
-          setRequestId("");
-          setRequestView("detail");
-          startRequestAfterCompany.current = false;
-        }
-      }
-      return next;
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "The workspace request failed.");
-      return undefined;
-    } finally {
-      setBusy("");
-    }
-  }
-
   async function createCompany(event: FormEvent) {
     event.preventDefault();
     const next = await run("company", () => api({ action: "createCompany", name: companyName }));
@@ -273,7 +215,9 @@ export default function CompanyWorkspace({
       setCompanyName("");
       setCreatingCompany(false);
       setPanel("requests");
-      setRequestView("list");
+      setRequestView(startRequestAfterCompany.current ? "detail" : "list");
+      setCreatingRequest(startRequestAfterCompany.current);
+      startRequestAfterCompany.current = false;
       setNotice(
         "Company workspace created. Add your request templates and approved knowledge when ready.",
       );
@@ -316,9 +260,27 @@ export default function CompanyWorkspace({
 
   async function action(body: Record<string, unknown>, success: string) {
     if (!company) return;
+    const submission = body.action === "saveReview" && body.review
+      ? captureSave(body.review as ScopeReview)
+      : undefined;
     const next = await run(String(body.action), () => api({ ...body, companyId: company.id }));
-    if (next) setNotice(success);
+    if (next) {
+      if (submission) {
+        const hasNewEdits = acknowledgeSave(submission, next.company?.requests.find((item) => item.id === body.requestId));
+        setEditing(hasNewEdits);
+        if (hasNewEdits) success += " Your newer edits are still unsaved.";
+      }
+      setNotice(success);
+    }
     return next;
+  }
+
+  async function discardAndReloadReview() {
+    if (busy || (dirtyReview && !window.confirm("Discard your unsaved scope changes and reload the saved scope?"))) return;
+    discardReviewDraft();
+    setEditing(false);
+    const next = await load(companyId);
+    if (next) setNotice("Unsaved scope changes discarded. The latest saved scope is shown.");
   }
 
   async function chooseFiles(files: FileList | null) {
@@ -461,6 +423,16 @@ export default function CompanyWorkspace({
             {notice}
           </div>
         )}
+        {data && !company && data.companies.length > 0 && (
+          <div className="mb-5 flex flex-wrap items-end gap-3">
+            <Field name="Switch workspace">
+              <select className={input} value={companyId} onChange={(event) => void selectCompany(event.target.value)}>
+                {data.companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+              </select>
+            </Field>
+            <button type="button" className={secondary} disabled={!!busy} onClick={() => void load(companyId)}>Reload workspace</button>
+          </div>
+        )}
         {creatingCompany && (
           <div className="grid flex-1 place-items-center py-8">
             <form onSubmit={createCompany} className={card + " w-full max-w-xl"}>
@@ -506,7 +478,7 @@ export default function CompanyWorkspace({
             </form>
           </div>
         )}
-        {data && !company && !creatingCompany && (
+        {data && !company && !creatingCompany && !busy && !companyId && (
           <div className="grid flex-1 place-items-center py-12">
             <section className={card + " w-full max-w-2xl text-center !p-8 sm:!p-12"}>
               <span className="mx-auto mb-6 grid size-14 place-items-center rounded-2xl bg-estimator-signal text-estimator-signal-ink">
@@ -534,7 +506,7 @@ export default function CompanyWorkspace({
             </section>
           </div>
         )}
-        {!data && !error && (
+        {(!data || (!company && busy === "load")) && !error && (
           <div className="grid flex-1 place-items-center py-20">
             <p role="status" className="flex items-center gap-3 text-sm text-estimator-muted">
               <Loader2 size={18} className="animate-spin" />
@@ -635,12 +607,26 @@ export default function CompanyWorkspace({
             {busy && (
               <p className="mb-4 flex items-center gap-2 text-sm text-[var(--muted)]" role="status">
                 <Loader2 size={15} className="animate-spin" />
-                {busy === "receive"
+                {busy === "load"
+                  ? "Opening workspace"
+                  : busy === "receive"
                   ? "Analyzing request with AI…"
                   : busy === "analyze"
                     ? "Retrying AI analysis…"
                     : "Saving changes…"}
               </p>
+            )}
+
+            {draftCount > 0 && (
+              <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-950" role="status">
+                <div>
+                  <p className="font-medium">{dirtyReview ? "You have unsaved scope changes." : `${draftCount} unsaved scope ${draftCount === 1 ? "draft is" : "drafts are"} kept in this tab.`}</p>
+                  <p className="mt-1 text-xs leading-5">{serverChanged ? "This request changed on the server. Your draft is preserved. Discard the draft and reload the saved scope before saving again." : "Moving between briefs or workspace settings keeps your draft. Save the scope before closing this tab. Add any unfinished reviewer question before saving."}</p>
+                </div>
+                {dirtyReview && (
+                  <button type="button" className={secondary} disabled={!!busy} onClick={() => void discardAndReloadReview()}>Discard draft and reload saved scope</button>
+                )}
+              </div>
             )}
 
             {panel === "requests" && (
@@ -910,10 +896,11 @@ export default function CompanyWorkspace({
                               reviewState={reviewState}
                               editing={editing}
                               canEstimate={canEstimate}
-                              busy={!!busy}
+                              busy={!!busy || serverChanged}
                               unsavedScope={unsavedScope}
                               reviewerQuestion={reviewerQuestion}
                               onReviewChange={setReview}
+                              onDiscardChanges={() => void discardAndReloadReview()}
                               onEditingChange={setEditing}
                               onReviewerQuestionChange={setReviewerQuestion}
                               onQuestionResolutionChange={changeQuestionResolution}
@@ -1099,11 +1086,9 @@ export default function CompanyWorkspace({
                         className={input}
                         value={companyId}
                         onChange={(event) => {
-                          setRequestId("");
                           setRequestView("list");
                           setCreatingRequest(false);
-                          setCompanyId(event.target.value);
-                          void load(event.target.value);
+                          void selectCompany(event.target.value);
                         }}
                       >
                         {data!.companies.map((item) => (
