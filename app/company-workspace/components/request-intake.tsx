@@ -3,6 +3,7 @@
 import { Loader2, WandSparkles, X } from "lucide-react";
 import type { FormEvent } from "react";
 import type { ExtractedUpload } from "../../../lib/browser-document-extraction";
+import { DOCUMENT_FORMATS } from "../../../lib/document-extraction-policy";
 import { button, Field, input, Section } from "../ui";
 
 export type UploadItem = { file: File; result?: ExtractedUpload; error?: string };
@@ -99,7 +100,7 @@ export function RequestIntakeForm({
             className={input}
             type="file"
             multiple
-            accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.json,.eml"
+            accept={DOCUMENT_FORMATS.map(format => `.${format}`).join(",")}
             disabled={processingUploads || !!busy}
             onChange={(event) => {
               void onChooseFiles(event.currentTarget.files);
@@ -135,7 +136,7 @@ export function RequestIntakeForm({
                         {item.result.status.replaceAll("_", " ")} ·{" "}
                         {item.result.text.length.toLocaleString()} characters ·{" "}
                         {item.result.locators.length} references
-                        {item.result.truncated ? " · text shortened to 40,000 characters" : ""}
+                        {item.result.truncated ? " · extraction limited; review the original" : ""}
                         {item.result.message ? ` · ${item.result.message}` : ""}
                       </p>
                     )

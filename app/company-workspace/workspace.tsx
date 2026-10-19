@@ -13,6 +13,7 @@ import {
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { extractClientFile } from "../../lib/browser-document-extraction";
+import { BROWSER_DOCUMENT_UPLOAD_POLICY } from "../../lib/document-extraction-policy";
 import type {
   ScopeReview,
   ScopeWorkPackage,
@@ -325,7 +326,7 @@ export default function CompanyWorkspace({
   async function chooseFiles(files: FileList | null) {
     if (!files) return;
     const selected = Array.from(files);
-    if (selected.length + uploads.length > 10) {
+    if (selected.length + uploads.length > BROWSER_DOCUMENT_UPLOAD_POLICY.maxFiles) {
       setError("Choose no more than 10 request files.");
       return;
     }

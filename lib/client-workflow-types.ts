@@ -1,6 +1,7 @@
 import { evaluateReviewDecisions } from "./review-policy.ts";
 import { reviewBlockerMessages } from "./review-policy-messages.ts";
 import type { RequestInboxPage } from "./workflow-query-types";
+import type { ExtractedDocumentUpload } from "./document-extraction-policy";
 
 export const requestTypes = ["demo", "setup", "migration", "integration", "customization", "support"] as const;
 export type RequestType = typeof requestTypes[number];
@@ -59,7 +60,7 @@ export type ClientAnalysis = {
   sourceCheck: string;
   run: { model: string; elapsedMs: number; steps: string[] };
 };
-export type RequestAttachment = { id: string; name: string; type: string; size: number; sha256: string; text: string; status: "extracted" | "needs_attention" | "ocr_required"; message?: string; locators: string[]; truncated: boolean; objectKey?: string };
+export type RequestAttachment = ExtractedDocumentUpload & { id: string; objectKey?: string };
 export type ScopeReview = {
   requestType: RequestType;
   productId: string;

@@ -6,6 +6,8 @@ import { workflowDb } from "../../../lib/workflow-governance";
 import { requireReadableCompany } from "../../../lib/workflow-queries";
 import { normalizeWorkspaceQuery } from "../../../lib/workflow-query-types";
 import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
+import { BROWSER_DOCUMENT_UPLOAD_POLICY, DOCUMENT_EXTRACTION_LIMITS, documentExtension, isSupportedDocumentFormat } from "../../../lib/document-extraction-policy";
+import type { ExtractedDocumentUpload } from "../../../lib/document-extraction-policy";
 
 export const dynamic = "force-dynamic";
 
@@ -86,18 +88,18 @@ export async function POST(request: Request) {
     await ensureClientWorkflowSchema();
     if (request.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data")) {
       const contentLength = Number(request.headers.get("content-length") ?? 0);
-      if (contentLength > 25 * 1024 * 1024) return Response.json({ error: "The combined upload must not exceed 20 MB." }, { status: 413 });
+      if (contentLength > BROWSER_DOCUMENT_UPLOAD_POLICY.maxBodyBytes) return Response.json({ error: "The combined upload must not exceed 20 MB." }, { status: 413 });
       const form = await request.formData();
       const serialized = form.get("payload");
       if (typeof serialized !== "string" || serialized.length > 1024000) return Response.json({ error: "The request metadata is missing or too large." }, { status: 400 });
-      const parsed = JSON.parse(serialized) as { action?: string; companyId?: string; title?: string; text?: string; attachments?: Array<{ name: string; type: string; size: number; sha256: string; text: string; status: string; message?: string; locators: string[]; truncated: boolean }> };
+      const parsed = JSON.parse(serialized) as { action?: string; companyId?: string; title?: string; text?: string; attachments?: ExtractedDocumentUpload[] };
       if (parsed.action !== "createRequest" || !parsed.companyId || typeof parsed.title !== "string") return Response.json({ error: "Files can only be attached to a new request." }, { status: 400 });
       const owned = await getWorkspace(user.userId, parsed.companyId, { inbox: true });
       if (!owned.company) return Response.json({ error: "Company workspace not found." }, { status: 404 });
       requireCompanyRole(owned.company.role, ["admin", "estimator"]);
       const files = form.getAll("files");
       const metadata = parsed.attachments ?? [];
-      if (!files.length || files.length !== metadata.length || files.length > 10) return Response.json({ error: "Choose between 1 and 10 files and include their extraction results." }, { status: 400 });
+      if (!files.length || files.length !== metadata.length || files.length > BROWSER_DOCUMENT_UPLOAD_POLICY.maxFiles) return Response.json({ error: "Choose between 1 and 10 files and include their extraction results." }, { status: 400 });
       if (!bucket) return Response.json({ error: "Private file storage is not configured for this Site." }, { status: 503 });
       let total = 0;
       const requestId = crypto.randomUUID();
@@ -106,12 +108,12 @@ export async function POST(request: Request) {
       for (let index = 0; index < files.length; index++) {
         const file = files[index];
         if (!(file instanceof File)) throw new ClientWorkflowError("A request attachment was invalid.");
-        const safeName = file.name.split(/[\\/]/).at(-1)?.slice(0, 200) ?? "attachment";
-        const extension = safeName.split(".").at(-1)?.toLowerCase() ?? "";
-        if (!new Set(["pdf", "docx", "xlsx", "csv", "txt", "md", "json", "eml"]).has(extension)) throw new ClientWorkflowError(`${safeName}: file type is not supported.`);
-        if (!file.size || file.size > 10 * 1024 * 1024) throw new ClientWorkflowError(`${safeName}: each file must be 10 MB or smaller.`);
+        const safeName = file.name.split(/[\\/]/).at(-1)?.slice(0, DOCUMENT_EXTRACTION_LIMITS.fileNameCharacters) ?? "attachment";
+        const extension = documentExtension(safeName);
+        if (!isSupportedDocumentFormat(extension)) throw new ClientWorkflowError(`${safeName}: file type is not supported.`);
+        if (!file.size || file.size > BROWSER_DOCUMENT_UPLOAD_POLICY.maxFileBytes) throw new ClientWorkflowError(`${safeName}: each file must be 10 MB or smaller.`);
         total += file.size;
-        if (total > 20 * 1024 * 1024) throw new ClientWorkflowError("The combined file size must not exceed 20 MB.");
+        if (total > BROWSER_DOCUMENT_UPLOAD_POLICY.maxTotalBytes) throw new ClientWorkflowError("The combined file size must not exceed 20 MB.");
         const details = metadata[index];
         if (!details || details.name !== safeName || details.type !== extension || details.size !== file.size || !/^[a-f0-9]{64}$/.test(details.sha256)) throw new ClientWorkflowError(`${safeName}: file metadata does not match the uploaded file.`);
         const bytes = await file.arrayBuffer();
