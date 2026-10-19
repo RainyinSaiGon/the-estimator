@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { SignJWT } from "jose";
 
-export type BriefServiceScope = "briefs:analyze" | "briefs:analyze-document";
+export type BriefServiceScope = "briefs:analyze" | "briefs:analyze-document" | "workflow:analyze" | "workflow:extract" | "workflow:fetch";
 
 type ActiveKey = { keyID: string; secret: Uint8Array };
 

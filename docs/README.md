@@ -23,3 +23,4 @@
 - [History CSV import](history-csv-import.md)
 - [UI design system](ui-design.md) and [design review](ui-design-review.md)
 - [Learning policy proposal schema](learning-policy-proposal.schema.json)
+- [Company workflow](company-workflow.md) — requirements coverage, setup, Gmail/forms, approved knowledge and MCP.

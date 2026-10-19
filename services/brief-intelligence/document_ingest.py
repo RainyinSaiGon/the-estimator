@@ -46,6 +46,13 @@ def _xml_text(raw: bytes) -> str:
     return "\n".join(text.strip() for text in root.itertext() if text and text.strip())
 
 
+def _xml_root(raw: bytes):
+    try:
+        return ElementTree.fromstring(raw)
+    except ElementTree.ParseError as error:
+        raise HTTPException(status_code=422, detail="This Office document contains malformed XML.") from error
+
+
 def _safe_archive(raw: bytes) -> zipfile.ZipFile:
     try:
         archive = zipfile.ZipFile(io.BytesIO(raw))
@@ -67,7 +74,9 @@ def _extract_docx(raw: bytes) -> str:
             document = archive.read("word/document.xml")
         except KeyError as error:
             raise HTTPException(status_code=422, detail="The Word document has no readable document body.") from error
-    return _xml_text(document)
+    root = _xml_root(document)
+    paragraphs = [" ".join(node.itertext()).strip() for node in root.iter() if node.tag.rsplit("}", 1)[-1] == "p"]
+    return "\n".join(f"Paragraph {index}\n{text}" for index, text in enumerate(paragraphs, 1) if text)
 
 
 def _extract_xlsx(raw: bytes) -> str:
@@ -75,12 +84,23 @@ def _extract_xlsx(raw: bytes) -> str:
         names = archive.namelist()
         shared: list[str] = []
         if "xl/sharedStrings.xml" in names:
-            shared_root = ElementTree.fromstring(archive.read("xl/sharedStrings.xml"))
+            shared_root = _xml_root(archive.read("xl/sharedStrings.xml"))
             shared = ["".join(node.itertext()) for node in shared_root]
-        sheet_names = sorted(name for name in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name))
+        sheet_names = sorted((name for name in names if re.fullmatch(r"xl/worksheets/sheet\d+\.xml", name)), key=lambda name: int(re.search(r"sheet(\d+)", name).group(1)))
+        sheet_titles = {}
+        if "xl/workbook.xml" in names and "xl/_rels/workbook.xml.rels" in names:
+            relationships = _xml_root(archive.read("xl/_rels/workbook.xml.rels"))
+            targets = {node.attrib.get("Id"): node.attrib.get("Target", "") for node in relationships}
+            workbook = _xml_root(archive.read("xl/workbook.xml"))
+            for sheet in workbook.iter():
+                if sheet.tag.rsplit("}", 1)[-1] == "sheet":
+                    relation_id = next((value for key, value in sheet.attrib.items() if key.rsplit("}", 1)[-1] == "id"), "")
+                    target = targets.get(relation_id, "")
+                    normalized_target = target.lstrip("/") if target.startswith("/") else "xl/" + target
+                    sheet_titles[normalized_target] = sheet.attrib.get("name", normalized_target)
         lines: list[str] = []
         for sheet_name in sheet_names:
-            root = ElementTree.fromstring(archive.read(sheet_name))
+            root = _xml_root(archive.read(sheet_name))
             rows: list[str] = []
             for row in root.iter():
                 if row.tag.rsplit("}", 1)[-1] != "row":
@@ -90,23 +110,26 @@ def _extract_xlsx(raw: bytes) -> str:
                     if cell.tag.rsplit("}", 1)[-1] != "c":
                         continue
                     value = next((child.text or "" for child in cell if child.tag.rsplit("}", 1)[-1] == "v"), "")
-                    if cell.attrib.get("t") == "s" and value.isdigit() and int(value) < len(shared):
+                    if cell.attrib.get("t") == "inlineStr":
+                        value = "".join(cell.itertext())
+                    elif cell.attrib.get("t") == "s" and value.isdigit() and int(value) < len(shared):
                         value = shared[int(value)]
                     values.append(value)
                 if values:
-                    rows.append(" | ".join(values))
+                    rows.append(f"Row {row.attrib.get('r', len(rows) + 1)}: " + " | ".join(values))
             if rows:
-                lines.extend([f"Sheet: {PurePosixPath(sheet_name).stem}", *rows])
+                lines.extend([f"Sheet: {sheet_titles.get(sheet_name, PurePosixPath(sheet_name).stem)}", *rows])
     return "\n".join(lines)
 
 
 def _extract_pptx(raw: bytes) -> str:
     with _safe_archive(raw) as archive:
-        slides = sorted(name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name))
+        slides = sorted((name for name in archive.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)), key=lambda name: int(re.search(r"slide(\d+)", name).group(1)))
         lines = []
         for index, slide in enumerate(slides, start=1):
-            lines.append(f"Slide {index}")
-            lines.append(_xml_text(archive.read(slide)))
+            content = _xml_text(archive.read(slide)).strip()
+            if content:
+                lines.extend([f"Slide {index}", content])
     return "\n".join(lines)
 
 
@@ -146,7 +169,10 @@ def extract_document(filename: str, raw: bytes) -> dict[str, str | bool]:
             reader = PdfReader(io.BytesIO(raw), strict=False)
             if len(reader.pages) > 150:
                 raise HTTPException(status_code=413, detail="PDF files are limited to 150 pages.")
-            text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            pages = [page.extract_text() or "" for page in reader.pages]
+            if len("".join(pages).strip()) < 30:
+                raise HTTPException(status_code=422, detail="Not enough readable PDF text was found. Scanned images need OCR before analysis.")
+            text = "\n".join(f"Page {index}\n{value}" for index, value in enumerate(pages, 1))
         except HTTPException:
             raise
         except Exception as error:  # noqa: BLE001 - normalize parser errors.

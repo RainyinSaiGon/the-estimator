@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from agent_runtime import run_agent_analysis
 from document_ingest import MAX_UPLOAD_BYTES, extract_document
 from service_auth import ServiceAuthConfigurationError, analysis_service_auth, configured_service_token_keys, service_token_auth_status
+from workflow_intelligence import router as workflow_router
 
 
 def _request_timeout_seconds() -> float:
@@ -36,6 +37,9 @@ REQUEST_ID_PATTERN = re.compile(
     re.IGNORECASE,
 )
 ANALYSIS_SERVICE_SCOPES = {
+    "/v1/workflow/analyze": "workflow:analyze",
+    "/v1/workflow/extract": "workflow:extract",
+    "/v1/workflow/fetch": "workflow:fetch",
     "/v1/briefs/analyze": "briefs:analyze",
     "/v1/briefs/analyze-document": "briefs:analyze-document",
 }
@@ -150,6 +154,7 @@ class OperationsMiddleware:
 
 app = FastAPI(title="The Estimator Brief Intelligence", version="0.1.0")
 app.add_middleware(OperationsMiddleware)
+app.include_router(workflow_router)
 
 
 class AnalyzeRequest(BaseModel):

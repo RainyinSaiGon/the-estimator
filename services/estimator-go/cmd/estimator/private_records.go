@@ -148,8 +148,15 @@ func openRecordStore() (*recordStore, error) {
 		pool.Close()
 		return nil, errors.New("private-record lifecycle schema could not be initialized")
 	}
+	if _, err := pool.Exec(ctx, companySchema); err != nil {
+		pool.Close()
+		return nil, errors.New("company workflow schema could not be initialized")
+	}
 	if err := store.cleanupExpiredRecords(ctx); err != nil {
 		slog.Error("private_record_startup_cleanup_failed", "service", "estimator-go")
+	}
+	if err := store.cleanupCompanyRetention(ctx); err != nil {
+		slog.Error("company_workflow_startup_cleanup_failed", "service", "estimator-go")
 	}
 	return store, nil
 }
@@ -181,6 +188,9 @@ func (store *recordStore) runRetentionCleanup(ctx context.Context) {
 		case <-ticker.C:
 			cleanupContext, cancel := context.WithTimeout(ctx, 10*time.Second)
 			err := store.cleanupExpiredRecords(cleanupContext)
+			if err == nil {
+				err = store.cleanupCompanyRetention(cleanupContext)
+			}
 			cancel()
 			if err != nil {
 				slog.Error("private_record_retention_cleanup_failed", "service", "estimator-go")

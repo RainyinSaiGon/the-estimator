@@ -19,6 +19,13 @@ on:
       - "Dockerfile.web"
       - ".dockerignore"
       - "docs/service-operations.md"
+      - "apps/web/app/workspace/**"
+      - "apps/web/app/api/workflow/**"
+      - "apps/web/lib/*workflow*.ts"
+      - "apps/web/lib/knowledge-mcp*.ts"
+      - "apps/web/lib/reference-profiles.ts"
+      - "tests/workflow-*.test.mjs"
+      - "compose.private-records*"
   push:
     branches:
       - main
@@ -39,6 +46,13 @@ on:
       - "Dockerfile.web"
       - ".dockerignore"
       - "docs/service-operations.md"
+      - "apps/web/app/workspace/**"
+      - "apps/web/app/api/workflow/**"
+      - "apps/web/lib/*workflow*.ts"
+      - "apps/web/lib/knowledge-mcp*.ts"
+      - "apps/web/lib/reference-profiles.ts"
+      - "tests/workflow-*.test.mjs"
+      - "compose.private-records*"
   workflow_dispatch:
 
 permissions:
@@ -49,6 +63,22 @@ jobs:
     name: Validate API contracts
     runs-on: ubuntu-24.04
     timeout-minutes: 10
+    services:
+      workflow-postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_DB: postgres
+          POSTGRES_PASSWORD: workflow-ci-only
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      WORKFLOW_TEST_DATABASE_URL: postgres://postgres:workflow-ci-only@127.0.0.1:5432/postgres?sslmode=disable
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -78,3 +108,25 @@ jobs:
 
       - name: Validate schemas against live service payloads
         run: npm run check:contracts
+
+      - name: Lint native workflow changes
+        run: >-
+          npx eslint apps/web/app/workspace apps/web/app/api/workflow
+          apps/web/app/page.tsx apps/web/app/layout.tsx apps/web/app/sign-in/sign-in-form.tsx
+          apps/web/lib/brief-service-auth.ts apps/web/lib/workflow-*.ts
+          apps/web/lib/gmail-workflow.ts apps/web/lib/knowledge-mcp*.ts
+          apps/web/lib/reference-profiles.ts services/workflow-worker/worker.mjs
+          tests/workflow-*.test.mjs
+
+      - name: Build native web and check secret boundary
+        run: |
+          npm run typecheck
+          npm run build
+          npm run check:secrets
+
+      - name: Test workflow, knowledge protocol and worker
+        run: |
+          npm test
+          python -m unittest discover -s services/brief-intelligence -p 'test_*.py'
+          cd services/estimator-go
+          go test ./cmd/estimator

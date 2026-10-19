@@ -1,4 +1,16 @@
 services:
+  workflow-worker:
+    build:
+      context: .
+      dockerfile: services/workflow-worker/Dockerfile
+    restart: unless-stopped
+    environment:
+      WEB_SERVICE_URL: http://web:3000
+      WORKFLOW_POLL_INTERVAL_MS: ${WORKFLOW_POLL_INTERVAL_MS:-300000}
+      SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:?Set SERVICE_TOKEN_SECRET in the ignored local env file}
+    depends_on:
+      web:
+        condition: service_healthy
   postgres:
     image: postgres:17-alpine
     environment:

@@ -18,3 +18,7 @@ outputs
 tests
 vendor
 *.pem
+.venv
+**/__pycache__
+.local
+work

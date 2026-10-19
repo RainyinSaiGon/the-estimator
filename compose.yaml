@@ -10,6 +10,7 @@ services:
       BRIEF_SERVICE_TOKEN_SECRET: ${BRIEF_SERVICE_TOKEN_SECRET:-}
       BRIEF_SERVICE_TOKEN_KEY_ID: ${BRIEF_SERVICE_TOKEN_KEY_ID:-}
       SERVICE_TOKEN_SECRET: ${SERVICE_TOKEN_SECRET:-}
+      WORKFLOW_PUBLIC_URL: ${WORKFLOW_PUBLIC_URL:-}
     depends_on:
       brief:
         condition: service_healthy

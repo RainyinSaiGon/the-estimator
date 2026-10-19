@@ -1,15 +1,15 @@
 # The Estimator
 
-Turn a client brief into a reviewable software scope and explainable effort estimate. The Estimator extracts source-backed requirements, questions, risks, and team-fit findings, then builds a task-level estimate for a human to review.
+Turn incoming client requests and documents into reviewed scope, explainable task effort, and frozen estimates that can be compared with actual delivery. Configure the workflow for any company; Anduin is an optional reference profile.
 
 **Demo:** [the-estimator-anduin-vu.zanyloach6.chatgpt.site](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site) · **Source:** [RainyinSaiGon/the-estimator](https://github.com/RainyinSaiGon/the-estimator)
 
 ## What it does
 
-1. Read pasted text or an uploaded project brief.
-2. Review extracted requirements, evidence, questions, risks, and capability fit.
-3. Confirm the scope and inspect a task-by-task estimate with its assumptions.
-4. Save reviewed versions and compare delivery actuals with frozen estimates where eligible records are available.
+1. Receive requests through uploads, an authorized Gmail inbox, or a signed form/CRM webhook.
+2. Use AI to extract evidence, consult approved company knowledge, and identify product fit, gaps, and questions.
+3. Review scope and task effort, then freeze the baseline.
+4. Independently review actual delivery and evaluate declared holdouts, keeping synthetic data separate.
 
 The hosted demo runs the existing Sites application. The newer Next.js, Python, and Go service stack is a local preview and has not replaced the hosted runtime. Estimates are planning ranges; synthetic examples do not establish predictive accuracy.
 
@@ -28,7 +28,7 @@ Put the generated value in `.env.local` as `BRIEF_SERVICE_TOKEN_SECRET` and set 
 docker compose --env-file .env.local up --build
 ```
 
-Open [http://127.0.0.1:3000](http://127.0.0.1:3000). The default sample parser needs no OpenAI key; the internal service key above is still required. This preview is local and ephemeral by default. Use fictional or non-sensitive briefs. See [Local development](docs/local-development.md) for AI, private-workspace, and legacy-runtime setup.
+This starts the basic service preview. For the complete AI company workspace at [http://localhost:3000/workspace](http://localhost:3000/workspace), configure OpenAI, first-party identity and private storage using [the setup guide](docs/company-workflow.md#run-locally). See [Local development](docs/local-development.md) for keys, email verification and the legacy runtime.
 
 ## Repository layout
 
