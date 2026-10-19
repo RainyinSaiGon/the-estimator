@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState, type FormEvent } from "react";
+import { ArrowLeft, BookOpenCheck } from "lucide-react";
 import { button, card, input, label, secondary } from "../ui";
 
 type Source = {
@@ -14,10 +15,15 @@ export default function KnowledgeSourcesManager({ userName }: { userName: string
   const [state, setState] = useState<KnowledgeState>();
   const [domainText, setDomainText] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
+  const [sourceQuery, setSourceQuery] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const companyFromQuery = typeof window === "undefined" ? "" : new URLSearchParams(window.location.search).get("company") ?? "";
+  const visibleSources = state?.sources.filter(source => {
+    const query = sourceQuery.trim().toLocaleLowerCase();
+    return !query || [source.title, source.url, source.text, source.status].some(value => value.toLocaleLowerCase().includes(query));
+  }) ?? [];
 
   const load = useCallback(async () => {
     setError("");
@@ -65,10 +71,10 @@ export default function KnowledgeSourcesManager({ userName }: { userName: string
     if (await send({ action, sourceId: source.id, expectedVersion: state?.company.version })) setNotice(action === "approveSource" ? "Knowledge source approved." : "Knowledge source retired.");
   }
 
-  return <main className="mx-auto w-full max-w-5xl px-5 py-8 sm:px-8 sm:py-12">
-    <header className="flex flex-wrap items-start justify-between gap-5 border-b border-estimator-line pb-6">
-      <div><p className="text-xs uppercase tracking-[0.2em] text-estimator-muted">Company knowledge</p><h1 className="mt-2 text-3xl font-medium tracking-tight text-estimator-ink sm:text-4xl">Approved sources</h1><p className="mt-3 max-w-2xl text-sm leading-6 text-estimator-muted">{state ? `${state.company.name} · managed by ${userName}` : `Managed by ${userName}`}. Imported pages stay in draft until an administrator reviews and approves them.</p></div>
-      <a className={secondary} href={state ? `/company-workspace?company=${encodeURIComponent(state.company.id)}` : "/company-workspace"}>Back to workspace</a>
+  return <main className="mx-auto w-full max-w-6xl px-5 py-6 sm:px-8 sm:py-8">
+    <header className="mb-7 flex flex-col gap-5 border-b border-estimator-line pb-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="flex min-w-0 items-start gap-3"><span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-estimator-signal text-estimator-signal-ink"><BookOpenCheck size={20}/></span><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">The Estimator · company knowledge</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-estimator-ink sm:text-3xl">Approved sources</h1><p className="mt-1.5 max-w-2xl text-sm leading-6 text-estimator-muted">{state ? `${state.company.name} · ` : ""}Managed by {userName}. New pages stay in draft until an administrator reviews them.</p></div></div>
+      <a className={secondary + " shrink-0"} href={state ? `/company-workspace?company=${encodeURIComponent(state.company.id)}` : "/company-workspace"}><ArrowLeft size={16}/>Back to workspace</a>
     </header>
 
     {error && <div role="alert" className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900">{error}</div>}
@@ -94,9 +100,10 @@ export default function KnowledgeSourcesManager({ userName }: { userName: string
       </section>
 
       <section className={`${card} space-y-4`}>
-        <div><h2 className="text-lg font-medium tracking-tight text-estimator-ink">Source versions</h2><p className="mt-2 text-sm leading-6 text-estimator-muted">Only approved versions are searchable by AI and available through the read-only knowledge connector. Re-fetching creates a new draft version.</p></div>
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div><h2 className="text-lg font-medium tracking-tight text-estimator-ink">Source versions <span className="ml-1 rounded-lg bg-estimator-paper px-2 py-1 text-xs font-medium text-estimator-muted">{state.sources.length}</span></h2><p className="mt-2 text-sm leading-6 text-estimator-muted">Only approved versions are searchable by AI and available through the read-only knowledge connector. Re-fetching creates a new draft version.</p></div><label className="block w-full text-[13px] font-medium leading-5 text-estimator-ink sm:max-w-xs">Find a source<input className={`${input} mt-1`} type="search" value={sourceQuery} onChange={event => setSourceQuery(event.target.value)} placeholder="Search title, URL, or text"/></label></div>
         {!state.sources.length && <p className="rounded-xl bg-[var(--paper)] p-4 text-sm text-estimator-muted">No knowledge sources yet.</p>}
-        <div className="space-y-4">{[...state.sources].reverse().map(source => <article key={source.id} className="min-w-0 rounded-2xl border border-estimator-line p-4 sm:p-5">
+        {state.sources.length > 0 && visibleSources.length === 0 && <p className="rounded-xl bg-estimator-paper p-4 text-sm text-estimator-muted">No sources match “{sourceQuery}”.</p>}
+        <div className="space-y-4">{[...visibleSources].reverse().map(source => <article key={source.id} className="min-w-0 rounded-2xl border border-estimator-line p-4 sm:p-5">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="min-w-0"><div className="flex flex-wrap items-center gap-2"><h3 className="break-words text-base font-medium text-estimator-ink">{source.title}</h3><span className={`rounded-full px-2.5 py-1 text-xs ${source.status === "approved" ? "bg-emerald-50 text-emerald-900" : source.status === "retired" ? "bg-neutral-100 text-neutral-700" : "bg-amber-50 text-amber-950"}`}>{source.status}</span></div>
               <a href={source.url} target="_blank" rel="noreferrer" className="mt-2 block break-all text-xs leading-5 text-estimator-muted underline">{source.url || "Manually supplied source"}</a>

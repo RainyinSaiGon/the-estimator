@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
-import { ArrowLeft, Check, CheckCircle2, ClipboardList, FileText, History, Layers3, Loader2, Plug, Plus, Settings2, ShieldCheck, Sparkles, Users, WandSparkles, X } from "lucide-react";
+import { ArrowLeft, Check, CheckCircle2, ClipboardList, FileText, History, Layers3, Loader2, Plug, Plus, Search, Settings2, ShieldCheck, Sparkles, Users, WandSparkles, X } from "lucide-react";
 import type { ClientRequest, Company, CompanyConfig, ScopeReview, ScopeWorkPackage, WorkspaceResponse } from "../../lib/client-workflow-types";
 import { extractClientFile, type ExtractedUpload } from "../../lib/browser-document-extraction";
 import { configuredProductId } from "../../lib/workflow-product-selection";
@@ -24,6 +24,18 @@ const panels = [
 const types = ["demo", "setup", "migration", "integration", "customization", "support"] as const;
 const typeLabel: Record<string, string> = { demo: "Demo inquiry", setup: "Product setup", migration: "Migration", integration: "Integration", customization: "Customization", support: "Support" };
 type UploadItem = { file: File; result?: ExtractedUpload; error?: string };
+
+function requestStatusLabel(status: ClientRequest["status"]) {
+  return ({ received: "Received", analyzing: "Analyzing", needs_review: "Needs review", scope_confirmed: "Scope confirmed", estimated: "Estimated", frozen: "Frozen", analysis_failed: "Analysis failed" })[status];
+}
+
+function requestStatusTone(status: ClientRequest["status"]) {
+  if (status === "frozen") return "bg-emerald-100 text-emerald-900";
+  if (status === "analysis_failed") return "bg-red-100 text-red-900";
+  if (status === "estimated" || status === "scope_confirmed") return "bg-violet-100 text-violet-900";
+  if (status === "analyzing") return "bg-sky-100 text-sky-900";
+  return "bg-amber-100 text-amber-950";
+}
 
 function Field({ name, children }: { name: string; children: ReactNode }) { return <label className={label}>{name}{children}</label>; }
 type QuestionResolution = NonNullable<ScopeReview["questionResolutions"]>[string];
@@ -60,8 +72,11 @@ async function api(body?: Record<string, unknown> | FormData, companyId?: string
 
 function Progress({ request }: { request: ClientRequest }) {
   const steps = ["Receive", "Analyze", "Review scope", "Estimate", "Freeze"];
-  const current = request.status === "analysis_failed" ? 1 : request.status === "needs_review" || request.status === "analyzing" || request.status === "received" ? 2 : request.status === "scope_confirmed" ? 3 : request.status === "estimated" ? 4 : 5;
-  return <ol aria-label="Request workflow progress" className="grid grid-cols-5 gap-2">{steps.map((step, index) => <li key={step} className="min-w-0"><div className={`mb-2 h-1.5 rounded-full ${index < current ? "bg-[var(--ink)]" : "bg-[var(--line)]"}`} /><span className={`text-[10px] uppercase tracking-wide ${index < current ? "text-[var(--ink)]" : "text-[var(--muted)]"}`}>{step}</span></li>)}</ol>;
+  const current = request.status === "received" ? 1 : request.status === "analyzing" || request.status === "analysis_failed" ? 2 : request.status === "needs_review" ? 3 : request.status === "scope_confirmed" ? 4 : 5;
+  return <div aria-label="Request progress" className="rounded-xl border border-estimator-line bg-estimator-canvas/70 p-4">
+    <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-estimator-muted">Workflow progress</p><p className="text-xs font-medium text-estimator-ink">Step {current} of {steps.length} · {steps[current - 1]}</p></div>
+    <ol className="grid grid-cols-5 gap-2">{steps.map((step, index) => <li key={step} aria-current={index + 1 === current ? "step" : undefined} className="min-w-0"><div className={`mb-2 h-1.5 rounded-full ${index + 1 < current ? "bg-estimator-ink" : index + 1 === current ? "bg-estimator-accent" : "bg-estimator-line"}`} /><span className={`text-[10px] leading-4 ${index + 1 <= current ? "font-medium text-estimator-ink" : "text-estimator-muted"}`}>{step}</span></li>)}</ol>
+  </div>;
 }
 
 export default function CompanyWorkspace({ userName, guest = false }: { userName: string; guest?: boolean }) {
@@ -70,6 +85,7 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
   const [panel, setPanel] = useState<Panel>("requests");
   const [companyId, setCompanyId] = useState("");
   const [requestId, setRequestId] = useState("");
+  const [requestQuery, setRequestQuery] = useState("");
   const [creatingCompany, setCreatingCompany] = useState(false);
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [companyName, setCompanyName] = useState("");
@@ -86,6 +102,11 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
   const company = data?.company ?? null;
   const canEstimate = !!company && ["admin", "estimator"].includes(company.role);
   const request = company?.requests.find(item => item.id === requestId) ?? null;
+  const visibleRequests = company?.requests.filter(item => {
+    const query = requestQuery.trim().toLocaleLowerCase();
+    return !query || [item.title, item.text, item.status, typeLabel[item.review.requestType] ?? item.review.requestType]
+      .some(value => value.toLocaleLowerCase().includes(query));
+  }) ?? [];
   const [review, setReview] = useState<ScopeReview | null>(null);
   const [editing, setEditing] = useState(false);
 
@@ -243,17 +264,17 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
 
   if (guest) return <main className="mx-auto flex min-h-dvh w-full max-w-3xl items-center justify-center px-5 py-12 font-sans sm:px-8"><section className={card + " w-full text-center !p-8 sm:!p-12"}><Sparkles className="mx-auto mb-4" /><p className="text-xs uppercase tracking-[.18em] text-[var(--muted)]">Company request workflow</p><h1 className="mt-2 text-3xl font-medium tracking-tight">Sign in to open your workspace</h1><p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[var(--muted)]">Requests, evidence and frozen estimates are available only to your signed-in workspace.</p><a className={button + " mt-6"} href="/signin-with-chatgpt?return_to=%2Fcompany-workspace" onClick={event => { event.preventDefault(); const newRequest = startRequestAfterCompany.current || new URLSearchParams(window.location.search).get("new") === "1"; const returnTo = newRequest ? "/company-workspace?new=1" : "/company-workspace"; router.push(`/signin-with-chatgpt?return_to=${encodeURIComponent(returnTo)}`); }}>Sign in with ChatGPT</a></section></main>;
 
-  return <main id="company-main" className="mx-auto flex min-h-dvh w-full max-w-[1280px] flex-col px-5 py-6 font-sans sm:px-8 lg:px-10">
+  return <main id="company-main" className="mx-auto flex min-h-dvh w-full max-w-[1440px] flex-col px-5 py-6 font-sans sm:px-8 lg:px-10">
     <a className="sr-only focus:not-sr-only focus:mb-4 focus:rounded-full focus:bg-estimator-ink focus:px-4 focus:py-3 focus:text-white" href="#company-content">Skip to workspace content</a>
-    <header className="mb-8 flex flex-wrap items-center justify-between gap-5 border-b border-estimator-line pb-6">
+    <header className="mb-7 flex flex-col gap-5 border-b border-estimator-line pb-5 sm:flex-row sm:items-center sm:justify-between">
       <div className="flex min-w-0 items-center gap-3">
-        <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-full bg-estimator-signal text-estimator-signal-ink"><Layers3 size={20} /></span>
-        <div className="min-w-0"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 text-xl font-medium leading-tight tracking-tight sm:text-2xl">Request workspace</h1></div>
+        <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-estimator-signal text-estimator-signal-ink"><Layers3 size={20} /></span>
+        <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 text-xl font-semibold leading-tight tracking-tight sm:text-2xl">Company workspace</h1></div>
       </div>
-      <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
-        {data?.companies.length ? <select aria-label="Company workspace" className="min-h-11 w-full min-w-0 rounded-xl border border-estimator-line bg-white px-3 py-2 text-sm sm:w-60" value={companyId} onChange={event => { setRequestId(""); setCompanyId(event.target.value); void load(event.target.value); }}><option value="">Choose a company</option>{data.companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
-        <span className={`inline-flex shrink-0 items-center gap-2 rounded-full px-3 py-2 text-xs ${data?.aiReady ? "bg-green-50 text-green-800" : "bg-amber-50 text-amber-900"}`}><span className={`size-1.5 rounded-full ${data?.aiReady ? "bg-green-600" : "bg-amber-500"}`} />{!data ? "Loading…" : data.aiReady ? "AI ready" : "AI setup required"}</span>
-        <button className={secondary} onClick={() => setCreatingCompany(value => !value)}><Plus size={15} />{creatingCompany ? "Cancel setup" : "New company"}</button>
+      <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-[minmax(180px,260px)_auto_auto] sm:items-center">
+        {data?.companies.length ? <select aria-label="Company workspace" className={input + " mt-0 sm:w-64"} value={companyId} onChange={event => { setRequestId(""); setCompanyId(event.target.value); void load(event.target.value); }}><option value="">Choose a company</option>{data.companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
+        <span className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-medium ${data?.aiReady ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-950"}`}><span className={`size-2 rounded-full ${data?.aiReady ? "bg-emerald-600" : "bg-amber-500"}`} />{!data ? "Loading workspace" : data.aiReady ? "AI ready" : "AI setup needed"}</span>
+        <button className={secondary} onClick={() => setCreatingCompany(value => !value)}><Plus size={16} />{creatingCompany ? "Cancel" : "New company"}</button>
       </div>
     </header>
     <div id="company-content" tabIndex={-1} className={`min-w-0 flex-1 ${!company ? "flex flex-col" : ""}`}>
@@ -264,20 +285,35 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
     {!data && !error && <div className="grid flex-1 place-items-center py-20"><p role="status" className="flex items-center gap-3 text-sm text-estimator-muted"><Loader2 size={18} className="animate-spin"/>Opening your company workspace…</p></div>}
 
     {company && !creatingCompany && <>
-      <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div className="min-w-0"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-estimator-muted">{company.role} · configuration v{company.config.version}</p><h2 className="mt-2 break-words text-2xl font-medium tracking-tight sm:text-3xl">{company.name}</h2><p className="mt-2 text-xs text-estimator-muted">Signed in as {userName}</p></div></div>
-      <nav aria-label="Company sections" className="mb-7 grid max-w-full grid-cols-4 gap-1 border-b border-estimator-line sm:flex sm:flex-wrap">{panels.map(({ id, title, icon: Icon }) => {
-        const className = `inline-flex min-h-16 min-w-0 flex-col items-center justify-center gap-2 border-b-2 px-1 py-3 text-[11px] font-medium transition sm:min-h-12 sm:flex-row sm:px-4 sm:text-xs ${panel === id ? "border-estimator-ink text-estimator-ink" : "border-transparent text-estimator-muted hover:border-estimator-line hover:text-estimator-ink"}`;
-        if (id === "knowledge") return <Link key={id} href={`/company-workspace/knowledge?company=${encodeURIComponent(company.id)}`} className={className}><Icon size={15} />Approved knowledge</Link>;
-        return <button key={id} aria-current={panel === id ? "page" : undefined} className={className} onClick={() => { setPanel(id); setNotice(""); setError(""); }}><Icon size={15} />{title}</button>;
-      })}</nav>
+      <div className="mb-5 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between"><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">{company.role} · configuration v{company.config.version}</p><h2 className="mt-1.5 break-words text-2xl font-semibold tracking-tight sm:text-3xl">{company.name}</h2></div><p className="shrink-0 text-xs text-estimator-muted">Signed in as <span className="font-medium text-estimator-ink">{userName}</span></p></div>
+      <nav aria-label="Company sections" className="mb-6 max-w-full overflow-x-auto rounded-2xl border border-estimator-line bg-white p-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <div className="flex min-w-max flex-nowrap gap-1">{panels.map(({ id, title, icon: Icon }) => {
+        const navTitle = id === "knowledge" ? "Knowledge" : id === "members" ? "Members" : title;
+        const className = `inline-flex min-h-11 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-xl px-3 text-xs font-medium transition sm:px-4 ${panel === id ? "bg-estimator-ink text-white shadow-sm" : "text-estimator-muted hover:bg-estimator-paper hover:text-estimator-ink"}`;
+        if (id === "knowledge") return <Link key={id} href={`/company-workspace/knowledge?company=${encodeURIComponent(company.id)}`} className={className}><Icon size={15} />{navTitle}</Link>;
+        return <button key={id} aria-current={panel === id ? "page" : undefined} className={className} onClick={() => { setPanel(id); setNotice(""); setError(""); }}><Icon size={15} />{navTitle}</button>;
+      })}</div>
+      </nav>
       {busy && <p className="mb-4 flex items-center gap-2 text-sm text-[var(--muted)]" role="status"><Loader2 size={15} className="animate-spin" />{busy === "receive" ? "Analyzing request with AI…" : busy === "analyze" ? "Retrying AI analysis…" : "Saving changes…"}</p>}
 
-      {panel === "requests" && <div className="grid items-start gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
-        <aside aria-label="Request list" className="min-w-0 space-y-3 lg:sticky lg:top-6">
-          <button disabled={!canEstimate} className={button + " w-full"} onClick={() => { setCreatingRequest(true); setRequestId(""); }}><Plus size={16}/>Receive a request</button>
-          <p className="px-1 text-xs leading-5 text-estimator-muted">Start with a message and its documents, or receive a signed form submission through Connectors.</p>
-          <div className="max-h-64 space-y-2 overflow-y-auto p-1 lg:max-h-[60vh]">{company.requests.map(item => <button key={item.id} aria-pressed={requestId === item.id} className={`w-full rounded-xl border p-4 text-left transition hover:border-neutral-400 ${requestId === item.id ? "border-neutral-800 bg-white shadow-sm" : "border-estimator-line bg-white/60"}`} onClick={() => { setCreatingRequest(false); setRequestId(item.id); }}><strong className="block break-words text-sm font-medium leading-6">{item.title}</strong><span className="mt-2 inline-flex rounded-full bg-estimator-paper px-2 py-1 text-[10px] capitalize text-estimator-muted">{item.status.replaceAll("_", " ")}</span></button>)}</div>
-          {!company.requests.length && <p className={card + " text-sm text-[var(--muted)]"}>No requests yet. Add a client brief to begin.</p>}
+      {panel === "requests" && <>
+        <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><div className="flex items-center gap-2"><h3 className="text-lg font-semibold tracking-tight">Requests</h3><span className="rounded-lg bg-estimator-paper px-2 py-1 text-xs font-medium text-estimator-muted">{company.requests.length}</span></div><p className="mt-1 text-sm leading-5 text-estimator-muted">Review incoming work and move each request toward a frozen estimate.</p></div>
+          <button disabled={!canEstimate} className={button + " shrink-0"} onClick={() => { setCreatingRequest(true); setRequestId(""); }}><Plus size={16}/>New request</button>
+        </div>
+        <div className="grid items-start gap-5 lg:grid-cols-[300px_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)]">
+        <aside aria-label="Request inbox" className="min-w-0 rounded-2xl border border-estimator-line bg-white p-3 shadow-[0_2px_10px_#17191508] lg:sticky lg:top-6">
+          <div className="px-1 pb-3"><label className="relative block"><span className="sr-only">Search requests</span><Search size={16} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-estimator-muted"/><input className={input + " mt-0 pl-9"} type="search" value={requestQuery} onChange={event => setRequestQuery(event.target.value)} placeholder="Search requests" /></label><p className="mt-2 px-1 text-xs text-estimator-muted">{visibleRequests.length} of {company.requests.length} shown</p></div>
+          <div className="max-h-[60vh] space-y-2 overflow-y-auto p-1">{visibleRequests.map(item => {
+            const selected = requestId === item.id;
+            return <button key={item.id} aria-pressed={selected} className={`group w-full rounded-xl border p-3.5 text-left transition focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-estimator-accent ${selected ? "border-estimator-ink bg-estimator-ink text-white shadow-sm" : "border-estimator-line bg-estimator-canvas/60 text-estimator-ink hover:border-neutral-400 hover:bg-white"}`} onClick={() => { setCreatingRequest(false); setRequestId(item.id); }}>
+              <span className="flex items-start justify-between gap-3"><strong className="min-w-0 break-words text-sm font-semibold leading-5">{item.title}</strong><span className={`mt-0.5 size-2 shrink-0 rounded-full ${item.status === "analysis_failed" ? "bg-red-500" : item.status === "frozen" ? "bg-emerald-500" : item.status === "needs_review" ? "bg-amber-500" : "bg-estimator-accent"}`} aria-hidden="true"/></span>
+              <span className="mt-3 flex flex-wrap items-center gap-2"><span className={`inline-flex min-h-6 items-center rounded-md px-2 text-[11px] font-medium ${selected ? "bg-white/15 text-white" : requestStatusTone(item.status)}`}>{requestStatusLabel(item.status)}</span><span className={`text-[11px] ${selected ? "text-white/75" : "text-estimator-muted"}`}>{typeLabel[item.analysis?.requestType ?? item.review.requestType] ?? "Request"}</span></span>
+              <span className={`mt-2 block text-[11px] ${selected ? "text-white/70" : "text-estimator-muted"}`}><time dateTime={item.createdAt}>{new Date(item.createdAt).toLocaleDateString(undefined, { month: "short", day: "numeric" })}</time> · {item.channel === "webhook" ? "Form submission" : "Added manually"}</span>
+            </button>;
+          })}</div>
+          {!company.requests.length && <div className="rounded-xl bg-estimator-paper p-4 text-sm"><p className="font-medium text-estimator-ink">Your inbox is empty</p><p className="mt-1 text-xs leading-5 text-estimator-muted">Add a client brief or configure a form connector to receive requests.</p></div>}
+          {company.requests.length > 0 && visibleRequests.length === 0 && <p className="rounded-xl bg-estimator-paper p-4 text-sm text-estimator-muted">No requests match “{requestQuery}”.</p>}
         </aside>
         <div className="min-w-0 space-y-5">
           {creatingRequest && <Section title="Receive request" description="Paste a client message or add its documents. The server analyzes source text and approved company knowledge; a person reviews all findings before estimating."><form className="space-y-4" onSubmit={createRequest}><Field name="Request title"><input className={input} value={title} required minLength={3} maxLength={200} onChange={event => setTitle(event.target.value)} placeholder="e.g. Investor onboarding and data migration" /></Field><Field name="Evidence cohort"><select className={input} value={cohort} onChange={event => setCohort(event.target.value as "synthetic" | "recorded")}><option value="synthetic">Synthetic / test request</option><option value="recorded">Recorded client request</option></select><span className="mt-1 block">This classification is frozen before actuals and cannot be changed afterward.</span></Field><Field name="Client request"><textarea className={input} rows={8} value={text} maxLength={20000} onChange={event => setText(event.target.value)} placeholder="Paste the request email, form submission, or project brief…" /></Field><Field name="Add documents · PDF, Word, Excel, CSV, text, JSON, or email"><input className={input} type="file" multiple accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.json,.eml" disabled={processingUploads || !!busy} onChange={event => { void chooseFiles(event.currentTarget.files); event.currentTarget.value = ""; }} /></Field>{processingUploads && <p role="status" className="flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 size={15} className="animate-spin" />Reading file text and sheet or page references…</p>}{uploads.length > 0 && <ul className="space-y-2">{uploads.map((item,index)=><li key={`${item.file.name}-${index}`} className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[var(--line)] p-3"><div className="min-w-0"><p className="break-all text-sm font-medium">{item.file.name} <span className="font-normal text-[var(--muted)]">({(item.file.size/1024).toFixed(0)} KB)</span></p>{item.error ? <p className="mt-1 text-xs text-red-800">{item.error}</p> : item.result && <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{item.result.status.replaceAll("_", " ")} · {item.result.text.length.toLocaleString()} characters · {item.result.locators.length} references{item.result.truncated ? " · text shortened to 40,000 characters" : ""}{item.result.message ? ` · ${item.result.message}` : ""}</p>}</div><button type="button" className="rounded-full p-1 text-[var(--muted)] hover:bg-[var(--paper)]" aria-label={`Remove ${item.file.name}`} onClick={() => setUploads(current => current.filter((_,i)=>i!==index))}><X size={15}/></button></li>)}</ul>}<p className="rounded-xl bg-[var(--paper)] p-3 text-xs leading-5 text-[var(--muted)]">PDF, DOCX, XLSX, CSV, TXT, Markdown, JSON, and EML · 10 MB each, 20 MB total, 10 files. Extracted page or sheet references are shown with findings. Image-only PDFs need OCR, which this version does not provide. Original files are stored in private company storage and deleted when you delete the request. Request content and extracted text go to the configured AI provider; no numeric effort is generated by AI.</p><button className={button} disabled={!!busy || processingUploads || uploads.some(item=>!!item.error||!item.result) || !data?.aiReady || (text.trim().length < 30 && uploads.length === 0)}><WandSparkles size={16} />Analyze request</button>{!data?.aiReady && <p className="text-sm text-amber-800">Configure the server-side OpenAI key to analyze requests. Your text and files are not saved until analysis can start.</p>}</form></Section>}
@@ -326,7 +362,7 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
           </>}
           {!creatingRequest && !request && <Section title="From request to reviewed estimate" description="A human reviews the source-backed scope before the system calculates effort."><p className="text-sm leading-7 text-[var(--muted)]">Choose a request to review its evidence, questions, risks, assumptions, scope and task breakdown. No findings become a commitment until you confirm the scope and freeze a baseline.</p></Section>}
         </div>
-      </div>}
+      </div></>}
 
       {panel === "settings" && <ConfigurationPanel key={`${company.id}:${company.version}`} company={company} busy={!!busy} save={config => action({ action:"saveConfiguration",expectedVersion:company.version,config },"Versioned company configuration saved.")} />}
       {panel === "knowledge" && <KnowledgePanel key={`${company.id}:${company.version}`} company={company} busy={!!busy} action={body => action(body,"Company knowledge updated.")} />}
@@ -384,13 +420,83 @@ function EstimateTable({ estimate }: { estimate: NonNullable<ClientRequest["esti
 function Metric({ label: caption, value }: { label: string; value: string }) { return <div className="rounded-xl bg-[var(--paper)] p-3"><p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{caption}</p><p className="mt-1 text-sm font-semibold">{value}</p></div>; }
 
 function ConfigurationPanel({ company, busy, save }: { company: Company; busy: boolean; save: (config: CompanyConfig) => Promise<WorkspaceResponse | undefined> }) {
-  const [fields, setFields] = useState(JSON.stringify(company.config.fields,null,2));
-  const [products, setProducts] = useState(JSON.stringify(company.config.products,null,2));
-  const [tasks, setTasks] = useState(JSON.stringify(company.config.tasks,null,2));
+  const [fields, setFields] = useState(company.config.fields);
+  const [products, setProducts] = useState(company.config.products);
+  const [tasks, setTasks] = useState(company.config.tasks);
   const [capabilities, setCapabilities] = useState(company.config.capabilities.join("\n"));
-  const [parseError, setParseError] = useState("");
-  async function submit(event: FormEvent) { event.preventDefault(); try { setParseError(""); const config: CompanyConfig={...company.config,fields:JSON.parse(fields),products:JSON.parse(products),tasks:JSON.parse(tasks),capabilities:capabilities.split("\n").map(item=>item.trim()).filter(Boolean)}; await save(config); } catch(cause) { setParseError(cause instanceof Error?cause.message:"Settings must be valid JSON."); } }
-  return <Section title="Company workflow settings" description={`Configuration v${company.config.version}. Request and estimate snapshots retain the version that was active when they were frozen.`}><form className="space-y-4" onSubmit={submit}><fieldset className="space-y-4" disabled={busy || company.role !== "admin"}><div className="grid gap-4 md:grid-cols-2"><Field name="Conditional request fields · JSON"><textarea className={input+" font-mono text-xs"} rows={10} value={fields} onChange={event=>setFields(event.target.value)} /><span className="mt-1 block text-[10px]">Each item: key, label, requestTypes, required, optional priority (1–10)</span></Field><Field name="Product catalog · JSON"><textarea className={input+" font-mono text-xs"} rows={10} value={products} onChange={event=>setProducts(event.target.value)} /><span className="mt-1 block text-[10px]">Each item: id, name, description. Do not add unsupported capability claims.</span></Field><Field name="Task templates and effort assumptions · JSON"><textarea className={input+" font-mono text-xs"} rows={12} value={tasks} onChange={event=>setTasks(event.target.value)} /><span className="mt-1 block text-[10px]">Each item: id, label, baseHours, lowFactor (≤1), highFactor (≥1)</span></Field><Field name="Team capabilities"><textarea className={input} rows={12} value={capabilities} onChange={event=>setCapabilities(event.target.value)} placeholder="One approved team skill per line" /><span className="mt-1 block text-[10px]">Unknown capabilities stay unknown until configured here.</span></Field></div>{parseError&&<p role="alert" className="rounded-lg bg-red-50 p-3 text-sm text-red-900">{parseError}</p>}<button className={button} disabled={busy}><Settings2 size={15}/>Save versioned settings</button></fieldset></form></Section>;
+  const activeRequests = company.requests.filter(request => request.status !== "frozen");
+
+  function createId(prefix: string, existing: string[]) {
+    let id = `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
+    while (existing.includes(id)) id = `${prefix}-${crypto.randomUUID().replaceAll("-", "").slice(0, 8)}`;
+    return id;
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    await save({ ...company.config, fields, products, tasks, capabilities: capabilities.split("\n").map(item => item.trim()).filter(Boolean) });
+  }
+
+  return <Section title="Company workflow settings" description={`Configuration v${company.config.version}. Saved changes create a new version; existing requests and frozen estimates retain their original snapshot.`}>
+    {company.role !== "admin" && <p className="mb-4 rounded-xl bg-amber-50 p-3 text-sm leading-6 text-amber-950">Only company admins can change these settings. You can still review the current setup.</p>}
+    <form className="space-y-5" onSubmit={submit}>
+      <fieldset disabled={busy || company.role !== "admin"} className="space-y-5 disabled:opacity-75">
+        <section className="rounded-2xl border border-estimator-line bg-estimator-canvas/70 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-semibold tracking-tight">Request fields</h3><p className="mt-1 text-sm leading-5 text-estimator-muted">Choose which details reviewers capture for each kind of request.</p></div><span className="rounded-lg bg-white px-2.5 py-1 text-xs text-estimator-muted">{fields.length} fields</span></div>
+          <div className="mt-4 space-y-3">
+            {fields.map((field, index) => {
+              const inUse = activeRequests.filter(request => Object.hasOwn(request.review.fieldAnswers ?? {}, field.key)).length;
+              return <article key={field.key} className="rounded-xl border border-estimator-line bg-white p-4">
+              <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_120px]">
+                <Field name="Field label"><input className={input} maxLength={100} required value={field.label} onChange={event => setFields(current => current.map((item, i) => i === index ? { ...item, label: event.target.value } : item))} placeholder="e.g. Number of investors"/></Field>
+                <Field name="Priority · 1–10"><input className={input} type="number" min="1" max="10" step="1" value={field.priority ?? 5} onChange={event => setFields(current => current.map((item, i) => i === index ? { ...item, priority: Number(event.target.value) } : item))}/></Field>
+              </div>
+              <p className="mt-3 text-xs font-medium text-estimator-muted">Use this field for</p>
+              <div className="mt-2 flex flex-wrap gap-2">{types.map(type => <label key={type} className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-estimator-line px-3 text-xs text-estimator-ink"><input type="checkbox" checked={field.requestTypes.includes(type)} onChange={event => setFields(current => current.map((item, i) => i === index ? { ...item, requestTypes: event.target.checked ? [...item.requestTypes, type] : item.requestTypes.filter(value => value !== type) } : item))}/>{typeLabel[type]}</label>)}</div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3"><label className="inline-flex min-h-10 items-center gap-2 text-sm"><input type="checkbox" checked={field.required} onChange={event => setFields(current => current.map((item, i) => i === index ? { ...item, required: event.target.checked } : item))}/>Required before estimate</label><div className="flex items-center gap-2">{inUse > 0 && <span className="text-xs text-estimator-muted">Used in {inUse} open {inUse === 1 ? "request" : "requests"}</span>}<button className="min-h-10 px-2 text-sm font-medium text-red-800 underline disabled:text-estimator-muted disabled:no-underline" type="button" disabled={inUse > 0} onClick={() => setFields(current => current.filter((_, i) => i !== index))}>Remove field</button></div></div>
+            </article>;
+            })}
+            {!fields.length && <p className="rounded-xl bg-white p-4 text-sm text-estimator-muted">No additional request fields are configured yet.</p>}
+          </div>
+          <button className={secondary + " mt-3"} type="button" onClick={() => { const key = createId("field", fields.map(item => item.key)); setFields(current => [...current, { key, label: "", requestTypes: [...types], required: false, priority: 5 }]); }}><Plus size={15}/>Add request field</button>
+        </section>
+
+        <section className="rounded-2xl border border-estimator-line bg-estimator-canvas/70 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-semibold tracking-tight">Products and services</h3><p className="mt-1 text-sm leading-5 text-estimator-muted">Describe only the offerings your team can support. AI findings must still cite approved knowledge.</p></div><span className="rounded-lg bg-white px-2.5 py-1 text-xs text-estimator-muted">{products.length} products</span></div>
+          <div className="mt-4 space-y-3">{products.map((product, index) => {
+            const inUse = activeRequests.filter(request => request.review.productId === product.id).length;
+            return <article key={product.id} className="grid gap-3 rounded-xl border border-estimator-line bg-white p-4 sm:grid-cols-2">
+            <Field name="Product name"><input className={input} maxLength={100} required value={product.name} onChange={event => setProducts(current => current.map((item, i) => i === index ? { ...item, name: event.target.value } : item))} placeholder="e.g. Investor onboarding"/></Field>
+            <Field name="Short description"><textarea className={input} rows={2} maxLength={1000} value={product.description} onChange={event => setProducts(current => current.map((item, i) => i === index ? { ...item, description: event.target.value } : item))} placeholder="What does this product or service cover?"/></Field>
+            <div className="flex flex-wrap items-center justify-between gap-3 sm:col-span-2"><span className="font-mono text-[11px] text-estimator-muted">ID · {product.id}</span><div className="flex items-center gap-2">{inUse > 0 && <span className="text-xs text-estimator-muted">Used in {inUse} open {inUse === 1 ? "request" : "requests"}</span>}<button className="min-h-10 px-2 text-sm font-medium text-red-800 underline disabled:text-estimator-muted disabled:no-underline" type="button" disabled={inUse > 0} onClick={() => setProducts(current => current.filter((_, i) => i !== index))}>Remove product</button></div></div>
+          </article>;
+          })}</div>
+          <button className={secondary + " mt-3"} type="button" onClick={() => { const id = createId("product", products.map(item => item.id)); setProducts(current => [...current, { id, name: "", description: "" }]); }}><Plus size={15}/>Add product</button>
+        </section>
+
+        <section className="rounded-2xl border border-estimator-line bg-estimator-canvas/70 p-4 sm:p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3"><div><h3 className="text-base font-semibold tracking-tight">Task templates and effort ranges</h3><p className="mt-1 text-sm leading-5 text-estimator-muted">Set the prior hours per unit and the low/high planning multipliers. Approved training history can adjust eligible task estimates.</p></div><span className="rounded-lg bg-white px-2.5 py-1 text-xs text-estimator-muted">{tasks.length} templates</span></div>
+          <div className="mt-4 space-y-3">{tasks.map((task, index) => {
+            const inUse = activeRequests.filter(request => request.review.workPackages.some(item => item.taskId === task.id)).length;
+            return <article key={task.id} className="rounded-xl border border-estimator-line bg-white p-4">
+            <div className="grid gap-3 sm:grid-cols-2"><Field name="Task name"><input className={input} maxLength={100} required value={task.label} onChange={event => setTasks(current => current.map((item, i) => i === index ? { ...item, label: event.target.value } : item))}/></Field><p className="self-end pb-2 font-mono text-[11px] text-estimator-muted">ID · {task.id}</p></div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-3"><Field name="Base hours per unit"><input className={input} type="number" min="0.1" max="10000" step="0.1" required value={task.baseHours} onChange={event => setTasks(current => current.map((item, i) => i === index ? { ...item, baseHours: Number(event.target.value) } : item))}/></Field><Field name="Low multiplier · 0.1–1"><input className={input} type="number" min="0.1" max="1" step="0.05" required value={task.lowFactor} onChange={event => setTasks(current => current.map((item, i) => i === index ? { ...item, lowFactor: Number(event.target.value) } : item))}/></Field><Field name="High multiplier · 1–5"><input className={input} type="number" min="1" max="5" step="0.05" required value={task.highFactor} onChange={event => setTasks(current => current.map((item, i) => i === index ? { ...item, highFactor: Number(event.target.value) } : item))}/></Field></div>
+            <div className="mt-2 flex flex-wrap items-center gap-2">{inUse > 0 && <span className="text-xs text-estimator-muted">Used in {inUse} open {inUse === 1 ? "request" : "requests"}</span>}<button className="min-h-10 px-2 text-sm font-medium text-red-800 underline disabled:text-estimator-muted disabled:no-underline" type="button" disabled={tasks.length <= 1 || inUse > 0} onClick={() => setTasks(current => current.filter((_, i) => i !== index))}>Remove template</button></div>
+          </article>;
+          })}</div>
+          <button className={secondary + " mt-3"} type="button" onClick={() => { const id = createId("task", tasks.map(item => item.id)); setTasks(current => [...current, { id, label: "", baseHours: 1, lowFactor: 0.75, highFactor: 1.5 }]); }}><Plus size={15}/>Add task template</button>
+        </section>
+
+        <section className="rounded-2xl border border-estimator-line bg-estimator-canvas/70 p-4 sm:p-5">
+          <h3 className="text-base font-semibold tracking-tight">Team capabilities</h3><p className="mt-1 text-sm leading-5 text-estimator-muted">List skills or systems the team is prepared to support. One item per line.</p>
+          <Field name="Configured capabilities"><textarea className={input} rows={5} maxLength={8000} value={capabilities} onChange={event => setCapabilities(event.target.value)} placeholder={'Salesforce\nInvestor data migration\nREST API integrations'}/></Field>
+          <p className="mt-2 text-xs leading-5 text-estimator-muted">An unlisted capability stays unknown until an admin adds it and approved company knowledge supports it.</p>
+        </section>
+
+        <div className="flex flex-wrap items-center gap-3"><button className={button} disabled={busy || tasks.length === 0}><Settings2 size={16}/>{busy ? "Saving settings…" : "Save settings"}</button><span className="text-xs text-estimator-muted">Your changes create configuration version {company.config.version + 1}.</span></div>
+      </fieldset>
+    </form>
+  </Section>;
 }
 
 function KnowledgePanel({ company, busy, action }: { company: Company; busy: boolean; action: (body: Record<string, unknown>) => Promise<WorkspaceResponse | undefined> }) {
