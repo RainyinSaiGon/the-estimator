@@ -7,8 +7,8 @@ export const input = "mt-2 min-h-11 w-full min-w-0 rounded-xl border border-esti
 export const label = "block min-w-0 text-[13px] font-medium leading-5 text-estimator-ink";
 export const card = "min-w-0 rounded-2xl border border-estimator-line bg-white p-5 shadow-[0_2px_10px_#17191508] sm:p-6";
 
-export function Section({ title, description, children, className = "" }: { title: string; description?: string; children: ReactNode; className?: string }) {
-  return <section className={`${card} ${className}`}>
+export function Section({ title, description, children, className = "", id }: { title: string; description?: string; children: ReactNode; className?: string; id?: string }) {
+  return <section id={id} tabIndex={id ? -1 : undefined} className={`${card} ${id ? "scroll-mt-6 focus:outline-none" : ""} ${className}`}>
     <div className="mb-5 border-b border-estimator-line pb-4">
       <h2 className="text-lg font-semibold tracking-tight text-estimator-ink">{title}</h2>
       {description && <p className="mt-1.5 max-w-3xl text-sm leading-6 text-estimator-muted">{description}</p>}
