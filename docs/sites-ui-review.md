@@ -14,24 +14,31 @@ The hosted application is the root `app/` Sites application. The separate
   empty states in the available content area; preserve space for the footer.
 - Keep primary actions filled and distinguish secondary actions, selection,
   disabled controls, focus, loading, errors and success notices.
-- At phone widths, stack the company selector and use a compact two-row section
-  navigation. Keep long IDs, hashes, source passages and task names inside their
-  cards. Wide estimate tables scroll inside their own container.
+- Keep Requests and Evaluate as the primary navigation. Put Knowledge sources,
+  Company settings, Members, Connectors and Audit in the grouped Workspace settings menu. At phone widths,
+  wrap the two primary actions and keep the menu inside the viewport.
+- Keep long IDs, hashes, source passages and task names inside their cards.
+  Wide estimate tables scroll inside their own container.
 
 ## Verification coverage
 
 Browser review uses fictional local data and explicitly synthetic hosted test
 requests. It does not establish recorded delivery performance.
 
+Public-mode review also checks the anonymous shared-workspace warning, synthetic
+cohort enforcement, public-only credential disclosures, and demo-specific content
+on Requests, Knowledge sources, Company settings, Members, Connectors, Evaluate
+and Audit. Tracking edits are checked against the frozen baseline digest.
+
 | Surface | Coverage |
 | --- | --- |
 | Company sign-in, loading, empty and create states | Centering, typography, primary action and form layout |
-| Company Requests | Empty list, intake form, multi-file extraction, analyzed evidence, editable scope, effort plan and frozen baseline |
-| Knowledge | Source form, draft/approved library and provenance wrapping |
-| Settings | Versioned configuration fields and save controls |
+| Company Requests | Focused searchable inbox, full-page detail/back navigation, intake, multi-file extraction, analysis evidence, provisional editable work packages, scope gates, per-task effort, immutable baseline and task-level commitment tracking |
+| Knowledge sources | Source form, draft/approved library and provenance wrapping |
+| Company settings | Versioned configuration fields and save controls |
 | Members | Account ID, role descriptions and member form |
-| Connectors | Webhook setup/status and root `/mcp` discovery instructions |
-| Evaluation | Warnings, separate recorded/synthetic cards and export controls |
+| Connectors | Demo credential rotation and revocation, signed webhook instructions, and root `/mcp` discovery instructions |
+| Evaluate | Warnings, separate recorded/synthetic cards and export controls |
 | Audit | Event layout and long identity wrapping |
 | Overview | Hero, navigation and workflow preview |
 | Legacy workspace | Scope, effort, delivery and empty views |

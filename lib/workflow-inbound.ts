@@ -1,6 +1,7 @@
 import { env } from "cloudflare:workers";
 import { z } from "zod";
 import { applyAction, ensureClientWorkflowSchema } from "./client-workflow";
+import { PUBLIC_DEMO_ACTOR_ID } from "./public-demo-access";
 import { ClientWorkflowError } from "./workflow-errors";
 import { revealWebhookCredential, textDigest, workflowDb } from "./workflow-governance";
 import type { RequestAttachment } from "./client-workflow-types";
@@ -114,7 +115,7 @@ export async function receiveInbound(request: Request, companyId: string) {
   if (!company) throw new ClientWorkflowError("Company not found.", 404);
   const requestId = crypto.randomUUID();
   const bucket = (env as unknown as { BUCKET?: R2Bucket }).BUCKET;
-  if (input.attachments.length && !bucket) throw new ClientWorkflowError("Private attachment storage is unavailable.", 503);
+  if (input.attachments.length && !bucket) throw new ClientWorkflowError("Attachment storage is unavailable.", 503);
   const attachments: RequestAttachment[] = [];
   const storedKeys: string[] = [];
   let total = 0;
@@ -139,7 +140,8 @@ export async function receiveInbound(request: Request, companyId: string) {
       storedKeys.push(objectKey);
       attachments.push({ id, objectKey, name, type: extension, size: bytes.length, sha256, ...extraction });
     }
-    await applyAction(company.owner_id, "Authorized form webhook", { action: "createRequest", companyId, requestId, title: input.title, text: input.text, cohort: input.cohort, uploadVerified: true, attachments }, { submissionId: input.submissionId, payloadDigest });
+    const cohort = company.owner_id === PUBLIC_DEMO_ACTOR_ID ? "synthetic" : input.cohort;
+    await applyAction(company.owner_id, "Authorized form webhook", { action: "createRequest", companyId, requestId, title: input.title, text: input.text, cohort, uploadVerified: true, attachments }, { submissionId: input.submissionId, payloadDigest });
     return { requestId, duplicate: false };
   } catch (error) {
     const persisted = await workflowDb().prepare("SELECT request_id, payload_digest FROM workflow_inbound WHERE company_id = ? AND submission_id = ?").bind(companyId, input.submissionId).first<{ request_id: string; payload_digest: string }>();

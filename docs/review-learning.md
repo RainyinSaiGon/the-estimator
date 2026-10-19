@@ -46,8 +46,8 @@ Comparisons use stored predictions for saved versions. Driver, inclusion and not
 
 Replacement versions require a reason of at least 10 characters, human review, and resolved baseline blockers. Scope/history-policy changes require a new baseline before delivery. A selected saved version can be exported independently of the latest version. Client-authored text is escaped in Markdown, and source lines are quoted.
 
-## Public access
+## Public access in the separate Next.js app
 
-The public root renders the product overview with no user records. Entering a workspace or starting a request directs anonymous visitors to sign-in. The API separately authenticates every request and filters every database read/update by its authenticated owner; making the Site public does not make project payloads public.
+This section describes `apps/web`, which is separate from the hosted Sites application at the judge URL. Its public root renders the product overview with no user records. Entering a private estimate workspace or starting a request directs anonymous visitors to sign-in. The API separately authenticates every request and filters every database read/update by its authenticated owner.
 
-The owner requested public Site access and explicitly deferred hosted AI configuration on 17 October 2026. The labelled sample parser remains the hosted demonstration path.
+The hosted Sites public demo has a different access model: anonymous visitors share a synthetic company workspace, and request analysis uses the configured OpenAI service. See [Sites releases and public demo limits](sites-release.md) and the [judge walkthrough](public-demo-runbook.md). Never use real client data or treat synthetic outcomes as delivery evidence.
