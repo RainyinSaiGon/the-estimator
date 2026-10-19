@@ -120,6 +120,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
       .some(value => value.toLocaleLowerCase().includes(query));
   }) ?? [];
   const [review, setReview] = useState<ScopeReview | null>(null);
+  const [editorReady, setEditorReady] = useState("");
   const [editing, setEditing] = useState(false);
 
   const load = useCallback(async (id?: string) => {
@@ -179,9 +180,10 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
   useEffect(() => {
     const focus = requestFocus.current;
     const timer = window.setTimeout(() => {
-      if (!request) { setReview(null); setReviewerQuestion(""); return; }
+      if (!request) { setReview(null); setEditorReady(""); setReviewerQuestion(""); return; }
       setReview(reviewForEditor(request, company?.config.products ?? []));
       setEditing(focus?.id === request.id && focus.section === "scope" && canEstimate && request.status !== "frozen");
+      setEditorReady(`${request.id}:${requestOpenSequence}`);
       setReviewerQuestion("");
     }, 0);
     return () => window.clearTimeout(timer);
@@ -189,7 +191,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
 
   useEffect(() => {
     const target = requestFocus.current;
-    if (!target || target.id !== request?.id || panel !== "requests" || requestView !== "detail" || !review) return;
+    if (!target || target.id !== request?.id || editorReady !== `${request.id}:${requestOpenSequence}` || panel !== "requests" || requestView !== "detail" || !review) return;
     const frame = window.requestAnimationFrame(() => {
       const section = document.getElementById(`request-${target.section}`);
       if (section) {
@@ -199,7 +201,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [panel, requestView, request, review, requestOpenSequence]);
+  }, [panel, requestView, request, review, requestOpenSequence, editorReady]);
 
   function openRequest(id: string, action?: string) {
     requestFocus.current = { id, section: action === "Review scope" ? "scope" : action === "Calculate effort" || action === "Commit plan" ? "effort" : action === "Open a committed plan" ? "tracking" : "analysis" };
