@@ -105,8 +105,8 @@ export async function POST(request: Request) {
       if (parsed.action === "createRequest" && Array.isArray(parsed.attachments) && parsed.attachments.length > 0) return Response.json({ error: "Request files must use the private file upload route." }, { status: 400 });
       body = parsed;
     }
-    if (access.publicDemo && body && typeof body === "object" && ["rotateCredential", "revokeCredential"].includes(String((body as { action?: unknown }).action))) {
-      return Response.json({ error: "External connector credentials are disabled in the public demo." }, { status: 403, headers: { "Cache-Control": "no-store" } });
+    if (access.publicDemo && body && typeof body === "object" && (body as { action?: unknown }).action === "createRequest") {
+      body = { ...(body as Record<string, unknown>), cohort: "synthetic" };
     }
     return Response.json(await applyAction(user.userId, user.displayName, body), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

@@ -29,7 +29,14 @@ export type ScopeWorkPackage = {
   owner: "company" | "customer" | "vendor";
   acceptance: string;
   dependencies: string;
+  rationale?: string;
+  evidence?: string;
+  evidenceSource?: string;
 };
+export type TaskTrackingStatus = "not_started" | "in_progress" | "blocked" | "complete";
+export type TaskMilestone = { id: string; title: string; dueDate: string; status: "pending" | "complete" };
+export type RequestTaskTracking = { workPackageId: string; status: TaskTrackingStatus; assignee: string; plannedStart: string; plannedEnd: string; blocker: string; milestones: TaskMilestone[] };
+export type ScopeChange = { id: string; description: string; reason: string; effortImpact: string; createdBy: string; createdAt: string; status: "proposed" };
 export type ClientAnalysis = {
   summary: string;
   requestType: RequestType;
@@ -91,6 +98,8 @@ export type ClientRequest = {
   review: ScopeReview;
   estimate?: WorkflowEstimate;
   baselines: FrozenBaseline[];
+  taskTracking?: RequestTaskTracking[];
+  scopeChanges?: ScopeChange[];
 };
 export type Company = {
   id: string;

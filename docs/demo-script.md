@@ -1,4 +1,6 @@
-# Ten-minute demonstration
+# Legacy single-estimate demonstration
+
+> The live public Site uses the company request workflow, not the older single-estimate screens described below. Use the current [public demo walkthrough](public-demo-runbook.md) when presenting the hosted Site.
 
 Use a fictional CRM request; the example is not real client data. Start with the workspace's **Try a sample** action. It explicitly uses a sample parser. To demonstrate live AI instead, choose **New request**, insert the sample text and choose **AI analysis** on a configured server.
 
@@ -25,8 +27,9 @@ Use a fictional CRM request; the example is not real client data. Start with the
 8. Explain that the built-in reference library has actual/base examples but no independent frozen prediction record, so those eight rows alone are not an accuracy evaluation cohort.
 
 ## Before submission
-- The owner chose to leave hosted AI unconfigured. Use **Try a sample** and keep the sample-parser label visible.
-- Open the public overview, sign in to a separate private workspace, and confirm judge access.
+- The hosted public Site uses the configured OpenAI service for live analysis. Its anonymous workspace is shared; use fictional requests and files only.
+- Open the [public company workspace](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site/company-workspace) in a signed-out browser and confirm it opens without login.
+- The separate local estimate app may show its sample parser; do not describe that as the hosted Sites workflow.
 - Submit https://github.com/RainyinSaiGon/the-estimator as the public source repository.
 - Check an unfamiliar brief, source evidence, failed-provider behavior and the complete delivery cycle once more after any material changes.
 
@@ -55,4 +58,4 @@ This checklist is a plan, not a record of a completed rehearsal. Mark results on
 - [ ] If the optional private workspace is configured, save and reopen a fictional estimate, then repeat with a second account and confirm the workspaces remain isolated.
 - [ ] Record the rehearsal date, setup, outcome, and any blocked steps before claiming the walkthrough has been verified.
 
-The product has no representative recorded delivery cohort for this preview. Do not claim improved scoping speed, consistency, or real-world estimate accuracy from the synthetic demo.
+The hosted product has no representative recorded delivery cohort for this preview. Do not claim improved scoping speed, consistency, or real-world estimate accuracy from the synthetic demo.

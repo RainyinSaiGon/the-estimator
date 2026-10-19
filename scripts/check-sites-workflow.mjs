@@ -41,8 +41,13 @@ await new Promise(resolve => socket.listen(0, "127.0.0.1", resolve));
 const port = socket.address().port; await new Promise(resolve => socket.close(resolve));
 const origin = `http://127.0.0.1:${port}`, url = origin + "/api/company-workspace";
 // Public, disposable test key. Never reused by a hosted environment.
-const worker = spawn(process.execPath, [...cli, "dev", "--config", configuration, "--local", "--persist-to", directory, "--ip", "127.0.0.1", "--port", String(port), "--inspector-port", "0", "--var", "WORKFLOW_ENCRYPTION_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
-let logs = ""; worker.stdout.on("data", bytes => { logs += bytes; }); worker.stderr.on("data", bytes => { logs += bytes; });
+let logs = "";
+function launchWorker(workerPort, publicAccess) {
+  const child = spawn(process.execPath, [...cli, "dev", "--config", configuration, "--local", "--persist-to", directory, "--ip", "127.0.0.1", "--port", String(workerPort), "--inspector-port", "0", "--var", "WORKFLOW_ENCRYPTION_KEY:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=", "--var", `PUBLIC_DEMO_ACCESS:${publicAccess}`], { cwd: root, stdio: ["ignore", "pipe", "pipe"] });
+  child.stdout.on("data", bytes => { logs += bytes; }); child.stderr.on("data", bytes => { logs += bytes; });
+  return child;
+}
+let worker = launchWorker(port, "true");
 const headers = actor => ({ "content-type": "application/json", origin, "oai-authenticated-user-id": actor, "oai-authenticated-user-email": `${actor}@example.invalid` });
 async function action(body, actor = "qa-owner", status = 200) {
   const response = await fetch(url, { method: "POST", headers: headers(actor), body: JSON.stringify({ companyId, ...body }) });
@@ -69,9 +74,43 @@ try {
   assert.equal(publicCompanyResponse.status, 200, JSON.stringify(publicCompanyWorkspace));
   assert.equal(publicCompanyWorkspace.actorId, "public-demo:shared");
   assert.equal(publicCompanyWorkspace.company.role, "admin");
-  const publicCredentialResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "rotateCredential", companyId: publicCompanyWorkspace.company.id, kind: "mcp" }) });
-  assert.equal(publicCredentialResponse.status, 403);
-  await publicCredentialResponse.text();
+  const publicCompanyId = publicCompanyWorkspace.company.id;
+  const publicMemberId = "qa-public-member";
+  const publicMemberResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "setMember", companyId: publicCompanyId, userId: publicMemberId, displayName: "Fictional QA member", role: "estimator" }) });
+  assert.equal(publicMemberResponse.status, 200, await publicMemberResponse.clone().text()); await publicMemberResponse.text();
+  const publicMcpCredentialResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "rotateCredential", companyId: publicCompanyId, kind: "mcp" }) });
+  assert.equal(publicMcpCredentialResponse.status, 200);
+  const publicMcpToken = (await publicMcpCredentialResponse.json()).issuedCredential.value;
+  const publicMcpCall = await fetch(origin + "/mcp?company=" + publicCompanyId, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer " + publicMcpToken }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "company_list", arguments: { companyId: publicCompanyId } } }) });
+  assert.equal(publicMcpCall.status, 200, await publicMcpCall.clone().text());
+  assert.ok((await publicMcpCall.json()).result.content[0].text.includes(publicCompanyId));
+  const publicRevokeMcp = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "revokeCredential", companyId: publicCompanyId, kind: "mcp" }) });
+  assert.equal(publicRevokeMcp.status, 200); await publicRevokeMcp.text();
+  const publicRevokedMcpCall = await fetch(origin + "/mcp?company=" + publicCompanyId, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", authorization: "Bearer " + publicMcpToken }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "company_list", arguments: { companyId: publicCompanyId } } }) });
+  assert.equal(publicRevokedMcpCall.status, 401); await publicRevokedMcpCall.text();
+  const publicRequestResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "createRequest", companyId: publicCompanyId, title: "FICTIONAL public demo cohort check", text: "A fictional sample request used only to verify public demo cohort protection.", cohort: "recorded" }) });
+  assert.equal(publicRequestResponse.status, 200);
+  const publicRequestWorkspace = await publicRequestResponse.json();
+  assert.equal(publicRequestWorkspace.company.requests.find(item => item.title === "FICTIONAL public demo cohort check").cohort, "synthetic");
+  const signedMemberRequest = await fetch(url, { method: "POST", headers: headers(publicMemberId), body: JSON.stringify({ action: "createRequest", companyId: publicCompanyId, title: "FICTIONAL signed member cohort check", text: "A fictional request verifies that a signed-in demo member cannot mark public data recorded.", cohort: "recorded" }) });
+  assert.equal(signedMemberRequest.status, 200, await signedMemberRequest.clone().text());
+  assert.equal((await signedMemberRequest.json()).company.requests.find(item => item.title === "FICTIONAL signed member cohort check").cohort, "synthetic");
+  const publicWebhookResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "rotateCredential", companyId: publicCompanyId, kind: "webhook" }) });
+  assert.equal(publicWebhookResponse.status, 200);
+  const publicWebhookSecret = (await publicWebhookResponse.json()).issuedCredential.value;
+  const publicPayload = { submissionId: "fictional-public-webhook", title: "FICTIONAL public webhook cohort check", text: "A fictional signed request used only to verify public webhook cohort protection.", cohort: "recorded", attachments: [] };
+  const publicTimestamp = new Date().toISOString(), publicBody = JSON.stringify(publicPayload);
+  const publicSignature = createHmac("sha256", publicWebhookSecret).update(publicTimestamp + "." + publicBody).digest("hex");
+  const publicInboundResponse = await fetch(origin + "/api/company-workspace/inbound/" + publicCompanyId, { method: "POST", headers: { "content-type": "application/json", "x-workflow-timestamp": publicTimestamp, "x-workflow-signature": publicSignature }, body: publicBody });
+  assert.equal(publicInboundResponse.status, 201, await publicInboundResponse.clone().text());
+  const publicInbound = await publicInboundResponse.json();
+  const publicWorkspaceAfterInbound = await fetch(url + "?company=" + publicCompanyId).then(response => response.json());
+  assert.equal(publicWorkspaceAfterInbound.company.requests.find(item => item.id === publicInbound.requestId).cohort, "synthetic");
+  const publicRevokeWebhook = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "revokeCredential", companyId: publicCompanyId, kind: "webhook" }) });
+  assert.equal(publicRevokeWebhook.status, 200); await publicRevokeWebhook.text();
+  const revokedPublicWebhookCall = await fetch(origin + "/api/company-workspace/inbound/" + publicCompanyId, { method: "POST", headers: { "content-type": "application/json", "x-workflow-timestamp": publicTimestamp, "x-workflow-signature": publicSignature }, body: publicBody });
+  assert.equal(revokedPublicWebhookCall.status, 401); await revokedPublicWebhookCall.text();
+  const retainedPublicWebhook = (await (await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "rotateCredential", companyId: publicCompanyId, kind: "webhook" }) })).json()).issuedCredential.value;
   for (let attempt = 0; attempt < 3; attempt++) {
     const rejected = await fetch(url, { method: "POST", headers: { ...headers("qa-owner"), origin: "https://other.invalid" }, body: "{}", signal: AbortSignal.timeout(15000) });
     assert.equal(rejected.status, 403); await rejected.text();
@@ -105,6 +144,13 @@ try {
   result = await action({ action: "confirmScope", requestId, expectedVersion: current.version, confirmed: true }); current = result.company.requests.find(row => row.id === requestId);
   result = await action({ action: "estimate", requestId, expectedVersion: current.version }); current = result.company.requests.find(row => row.id === requestId); assert.equal(current.estimate.baseHours, 10);
   result = await action({ action: "freeze", requestId, expectedVersion: current.version }); current = result.company.requests.find(row => row.id === requestId); assert.equal(current.baselines[0].evaluation.split, "holdout");
+  const frozenSha = current.baselines[0].sha256;
+  const tracking = { action: "saveTracking", requestId, expectedVersion: current.version, taskTracking: [{ workPackageId: taskId, status: "in_progress", assignee: "qa-owner", plannedStart: "2026-10-20", plannedEnd: "2026-10-23", blocker: "", milestones: [{ id: randomUUID(), title: "FICTIONAL validation checkpoint", dueDate: "2026-10-22", status: "pending" }] }], scopeChange: { description: "FICTIONAL additional sync request", reason: "Added after approval for the runtime fixture", effortImpact: "Requires a separate estimate" } };
+  await action({ ...tracking, taskTracking: [] }, "qa-owner", 400);
+  await action({ ...tracking, taskTracking: tracking.taskTracking.map(item => ({ ...item, assignee: "qa-stranger" })) }, "qa-owner", 400);
+  await action({ ...tracking, taskTracking: tracking.taskTracking.map(item => ({ ...item, plannedStart: "2026-02-30" })) }, "qa-owner", 400);
+  result = await action(tracking); current = result.company.requests.find(row => row.id === requestId);
+  assert.equal(current.baselines[0].sha256, frozenSha); assert.equal(current.taskTracking[0].status, "in_progress"); assert.equal(current.taskTracking[0].assignee, "qa-owner"); assert.equal(current.taskTracking[0].milestones[0].title, "FICTIONAL validation checkpoint"); assert.equal(current.scopeChanges[0].status, "proposed");
   await action({ action: "deleteRequest", requestId, expectedVersion: current.version }, "qa-owner", 400);
   await action({ action: "saveReview", requestId, expectedVersion: current.version, review: current.review }, "qa-owner", 400);
   const submission = { action: "submitDelivery", requestId, expectedVersion: current.version, actualHours: { [taskId]: 12 }, addedScopeHours: 100, evidence: "FICTIONAL time records and original scope reconciliation for this QA fixture only.", deliveredAt: new Date().toISOString(), originalScopeOnly: true, reviewerId: "qa-owner" };
@@ -136,6 +182,19 @@ try {
   assert.equal((await fetch(download)).status, 404); assert.equal((await fetch(download, { headers: headers("qa-stranger") })).status, 404); assert.equal((await fetch(download, { headers: headers("qa-reviewer") })).status, 200);
   await action({ action: "revokeCredential", kind: "webhook" }); await send(payload, webhook, 401);
   assert.ok((await workspace()).company.audit.some(event => event.action === "delivery.approved"));
-  console.log("PASS: roles, tenant/file isolation, CSRF, MCP discovery/scoping/revocation, scope gate, frozen baseline, task actuals, self-review rejection, independent approval, compatible holdout export, signed webhook replay/revocation.");
+  await new Promise(resolve => { const timeout = setTimeout(resolve, 3000); worker.once("exit", () => { clearTimeout(timeout); resolve(); }); worker.kill("SIGTERM"); });
+  const disabledSocket = net.createServer(); await new Promise(resolve => disabledSocket.listen(0, "127.0.0.1", resolve)); const disabledPort = disabledSocket.address().port; await new Promise(resolve => disabledSocket.close(resolve));
+  worker = launchWorker(disabledPort, "false");
+  const disabledOrigin = `http://127.0.0.1:${disabledPort}`, disabledUrl = disabledOrigin + "/api/company-workspace", disabledInboundUrl = disabledOrigin + "/api/company-workspace/inbound/" + publicCompanyId;
+  let memberWorkspaceResponse;
+  for (let attempt = 0; attempt < 300; attempt++) { if (worker.exitCode != null) throw new Error(logs); try { memberWorkspaceResponse = await fetch(disabledUrl + "?company=" + publicCompanyId, { headers: { "oai-authenticated-user-id": publicMemberId, "oai-authenticated-user-email": `${publicMemberId}@example.invalid` } }); if (memberWorkspaceResponse.status === 200) break; } catch {} await new Promise(resolve => setTimeout(resolve, 100)); }
+  assert.equal(memberWorkspaceResponse?.status, 200, await memberWorkspaceResponse?.clone().text());
+  const disabledPayload = { submissionId: "fictional-public-webhook-disabled-mode", title: "FICTIONAL webhook with public access disabled", text: "This fictional signed webhook checks the shared demo owner cohort when public access is disabled.", cohort: "recorded", attachments: [] };
+  const disabledTimestamp = new Date().toISOString(), disabledBody = JSON.stringify(disabledPayload), disabledSignature = createHmac("sha256", retainedPublicWebhook).update(disabledTimestamp + "." + disabledBody).digest("hex");
+  const disabledInboundResponse = await fetch(disabledInboundUrl, { method: "POST", headers: { "content-type": "application/json", "x-workflow-timestamp": disabledTimestamp, "x-workflow-signature": disabledSignature }, body: disabledBody });
+  assert.equal(disabledInboundResponse.status, 201, await disabledInboundResponse.clone().text()); const disabledInbound = await disabledInboundResponse.json();
+  const disabledWorkspace = await fetch(disabledUrl + "?company=" + publicCompanyId, { headers: { "oai-authenticated-user-id": publicMemberId, "oai-authenticated-user-email": `${publicMemberId}@example.invalid` } }).then(response => response.json());
+  assert.equal(disabledWorkspace.company.requests.find(row => row.id === disabledInbound.requestId).cohort, "synthetic");
+  console.log("PASS: roles, tenant/file isolation, CSRF, public demo synthetic cohorts for anonymous and signed-in members, disabled-mode signed webhook cohort enforcement, MCP discovery/scoping/revocation, scope gate, frozen baseline, task actuals, self-review rejection, independent approval, compatible holdout export, signed webhook replay/revocation.");
 } catch (error) { await new Promise(resolve => setTimeout(resolve, 1000)); console.error(error); console.error(logs.split("\n").filter(line => !/[│├└┌─]/.test(line)).slice(-90).join("\n")); process.exitCode = 1; }
 finally { worker.kill("SIGTERM"); await new Promise(resolve => { worker.once("exit", resolve); setTimeout(resolve, 3000).unref(); }); }
