@@ -102,4 +102,4 @@ Evaluation reports base/adjusted absolute error, signed bias, observed range cov
 - A company aggregate is bounded to 200 requests, 200 knowledge versions and 16 MB of encrypted JSON. This is a local prototype storage boundary, not a high-volume mailbox archive.
 - The staffing scenario assumes concurrently available people and explicit dependency delays. It does not consult a real staffing calendar.
 - Google authorization, a real submission provider, live email delivery, and representative recorded delivery data require the respective owner's setup/data. Local tests cannot verify those external accounts.
-- The hosted Sites demo remains the older application. This native workflow needs a separate deployment/cutover before it is available at the public demo URL.
+- The hosted Sites application has its own company workflow and GitHub release artifact. See [Sites deployment and coverage](sites-release.md) for its supported adapters, roles, webhooks, MCP and delivery review. The native processes described here remain a separate deployment target; Sites Gmail polling is deferred.
