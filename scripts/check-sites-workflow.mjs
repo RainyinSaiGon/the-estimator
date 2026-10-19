@@ -54,8 +54,24 @@ async function mcp(body, credential, scope = companyId, status = 200) {
   assert.equal(response.status, status, await response.clone().text()); return response.json();
 }
 try {
-  for (let attempt = 0; attempt < 300; attempt++) { if (worker.exitCode != null) throw new Error(logs); try { if ((await fetch(url)).status === 401) break; } catch {} await new Promise(resolve => setTimeout(resolve, 100)); }
-  assert.equal((await fetch(url)).status, 401);
+  let publicWorkspaceResponse;
+  for (let attempt = 0; attempt < 300; attempt++) { if (worker.exitCode != null) throw new Error(logs); try { publicWorkspaceResponse = await fetch(url); if (publicWorkspaceResponse.status === 200) break; } catch {} await new Promise(resolve => setTimeout(resolve, 100)); }
+  assert.equal(publicWorkspaceResponse?.status, 200);
+  const publicWorkspace = await publicWorkspaceResponse.json();
+  assert.equal(publicWorkspace.actorId, "public-demo:shared");
+  assert.deepEqual(publicWorkspace.companies, []);
+  const publicCannotReadFixture = await fetch(url + "?company=" + companyId);
+  assert.equal(publicCannotReadFixture.status, 200);
+  assert.equal((await publicCannotReadFixture.json()).company, undefined);
+  assert.equal((await fetch(origin + "/api/workspace")).status, 401);
+  const publicCompanyResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "createCompany", name: "FICTIONAL public demo QA" }) });
+  const publicCompanyWorkspace = await publicCompanyResponse.json();
+  assert.equal(publicCompanyResponse.status, 200, JSON.stringify(publicCompanyWorkspace));
+  assert.equal(publicCompanyWorkspace.actorId, "public-demo:shared");
+  assert.equal(publicCompanyWorkspace.company.role, "admin");
+  const publicCredentialResponse = await fetch(url, { method: "POST", headers: { "content-type": "application/json", origin }, body: JSON.stringify({ action: "rotateCredential", companyId: publicCompanyWorkspace.company.id, kind: "mcp" }) });
+  assert.equal(publicCredentialResponse.status, 403);
+  await publicCredentialResponse.text();
   for (let attempt = 0; attempt < 3; attempt++) {
     const rejected = await fetch(url, { method: "POST", headers: { ...headers("qa-owner"), origin: "https://other.invalid" }, body: "{}", signal: AbortSignal.timeout(15000) });
     assert.equal(rejected.status, 403); await rejected.text();
@@ -117,7 +133,7 @@ try {
   await send({ ...payload, text: payload.text + " Changed." }, webhook, 409);
   const inbound = (await workspace()).company.requests.find(row => row.id === received.requestId); assert.equal(inbound.channel, "webhook"); assert.equal(inbound.attachments[0].status, "extracted"); assert.equal(inbound.attachments[1].status, "extracted"); assert.ok(inbound.attachments[1].text.includes("FICTIONAL PDF source page.")); assert.deepEqual(inbound.attachments[1].locators, ["Page 1"]); assert.equal(inbound.status, "analysis_failed");
   const download = `${url}?company=${companyId}&request=${inbound.id}&file=${inbound.attachments[0].id}`;
-  assert.equal((await fetch(download)).status, 401); assert.equal((await fetch(download, { headers: headers("qa-stranger") })).status, 404); assert.equal((await fetch(download, { headers: headers("qa-reviewer") })).status, 200);
+  assert.equal((await fetch(download)).status, 404); assert.equal((await fetch(download, { headers: headers("qa-stranger") })).status, 404); assert.equal((await fetch(download, { headers: headers("qa-reviewer") })).status, 200);
   await action({ action: "revokeCredential", kind: "webhook" }); await send(payload, webhook, 401);
   assert.ok((await workspace()).company.audit.some(event => event.action === "delivery.approved"));
   console.log("PASS: roles, tenant/file isolation, CSRF, MCP discovery/scoping/revocation, scope gate, frozen baseline, task actuals, self-review rejection, independent approval, compatible holdout export, signed webhook replay/revocation.");
