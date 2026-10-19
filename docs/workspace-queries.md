@@ -6,6 +6,8 @@ Issue #81 separates reads from the existing command dispatcher in `lib/client-wo
 
 Add `request=<id>` to hydrate one request into `company.requests` and return its ID in `selectedId`. The company authorization check precedes inbox and detail reads, and attachment object keys remain private. POSTs accept the same query parameters so their responses preserve the inbox page and selected detail. Creating a request selects its new ID in the response.
 
+The Sites screen opts into this contract on every read and mutation response. Inbox search is debounced, paging uses server totals, and opening a summary fetches its detail through the workspace controller's cancellation/ordering guards. Returning to the list releases the hydrated detail; review drafts remain owned by the existing draft hook. Reload and discard fetch the active detail. If deleting the final row empties a page, the screen moves to the final remaining page. Sample-brief links and activity totals use the full-cohort aggregate.
+
 Calls without `inbox=1` keep the legacy `company.requests` collection contract. This compatibility response contains the complete company collection; consumers needing bounded payloads must opt into the inbox contract.
 
 Evaluation, activity and exports always traverse every company request in batches of 25 using an ID cursor, independently of inbox offset, search or selected detail. Evaluation accumulates counts, errors, coverage and domains without retaining the full cohort. Activity retains aggregate counts and the five most recently updated next actions plus their total count. Recorded and synthetic outcomes, independent-review requirements and training/holdout separation retain their existing policy.

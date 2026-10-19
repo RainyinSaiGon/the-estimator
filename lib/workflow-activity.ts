@@ -5,15 +5,14 @@ import { iterateCompanyRequests } from "./workflow-queries";
 
 /** Full-cohort aggregates, independent of inbox filters. Only the next five actions are hydrated into the UI. */
 export async function readCompanyActivity(companyId: string, config: CompanyConfig) {
-  void config; // Passed explicitly so centralized review policy can use the current configuration.
   const evaluation = createDeliveryEvaluationAccumulator();
-  const insights = { ...workflowInsights([]), nextActionCount: 0, committedRequestId: undefined as string | undefined, sampleRequestId: undefined as string | undefined };
+  const insights = { ...workflowInsights([], config), nextActionCount: 0, committedRequestId: undefined as string | undefined, sampleRequestId: undefined as string | undefined };
   const nextActions: { updatedAt: string; item: typeof insights.nextActions[number] }[] = [];
   let committedAt = "";
   let sampleAt = "";
   for await (const request of iterateCompanyRequests(companyId)) {
     evaluation.add(request);
-    const row = workflowInsights([request]);
+    const row = workflowInsights([request], config);
     for (const key of ["total", "analyzed", "processing", "proposedTasks", "citedFacts", "totalFacts", "openQuestions", "approvedScopes", "committed"] as const) insights[key] += row[key];
     for (const key of ["total", "reviewed", "accepted", "corrected", "rejected"] as const) insights.findings[key] += row.findings[key];
     insights.nextActionCount += row.nextActions.length;

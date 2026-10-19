@@ -61,6 +61,7 @@ export default function CompanyWorkspace({
   const requestFocus = useRef<{ id: string; section: string } | null>(null);
   const [requestOpenSequence, setRequestOpenSequence] = useState(0);
   const [requestQuery, setRequestQuery] = useState("");
+  const [inboxOffset, setInboxOffset] = useState(0);
   const [creatingCompany, setCreatingCompany] = useState(false);
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [companyName, setCompanyName] = useState("");
@@ -75,8 +76,8 @@ export default function CompanyWorkspace({
   const company = data?.company ?? null;
   const canEstimate = !!company && ["admin", "estimator"].includes(company.role);
   const request = company?.requests.find((item) => item.id === requestId) ?? null;
-  const sampleRequest = publicDemo
-    ? company?.requests.find((item) => item.cohort === "synthetic" && item.analysis)
+  const sampleRequestId = publicDemo
+    ? company?.insights?.sampleRequestId ?? company?.requests.find((item) => item.cohort === "synthetic" && item.analysis)?.id
     : undefined;
 
   const { review, setReview, dirty: dirtyReview, draftCount, serverChanged, discard: discardReviewDraft, captureSave, acknowledgeSave, reviewerQuestion, setReviewerQuestion } = useScopeReviewDrafts(companyId, request, company?.config.products);
@@ -89,9 +90,41 @@ export default function CompanyWorkspace({
   }
 
   useEffect(() => {
-    const timer = window.setTimeout(() => void load(), 0);
+    if (data && !data.company && !companyId) return;
+    const query = requestQuery.trim().slice(0, 200);
+    const selectedId = requestView === "detail" && !creatingRequest ? requestId : "";
+    if (data?.company?.id === companyId && data.inbox?.query === query && data.inbox.offset === inboxOffset && inboxOffset > 0 && inboxOffset >= data.inbox.total) {
+      const page = data.inbox;
+      const lastOffset = Math.floor(Math.max(0, page.total - 1) / page.limit) * page.limit;
+      const timer = window.setTimeout(() => setInboxOffset(lastOffset), 0);
+      return () => window.clearTimeout(timer);
+    }
+    const detailMatches = selectedId
+      ? company?.requests.some(item => item.id === selectedId)
+      : !company?.requests.length;
+    if (data?.company?.id === companyId && data.inbox?.offset === inboxOffset && data.inbox.query === query && detailMatches)
+      return;
+    const timer = window.setTimeout(() => void load(
+      companyId || undefined,
+      signal => api(undefined, companyId || undefined, signal, {
+        inbox: true, offset: inboxOffset, query, requestId: selectedId || undefined,
+      }),
+    ), data?.inbox?.query !== query ? 250 : 0);
     return () => window.clearTimeout(timer);
-  }, [load]);
+  }, [load, companyId, requestId, requestView, creatingRequest, requestQuery, inboxOffset, data, company]);
+
+  function reloadWorkspace() {
+    return load(companyId || undefined, signal => api(undefined, companyId || undefined, signal, {
+      inbox: true, offset: inboxOffset, query: requestQuery,
+      requestId: requestView === "detail" && !creatingRequest ? requestId || undefined : undefined,
+    }));
+  }
+
+  function switchWorkspace(id: string) {
+    setRequestQuery("");
+    setInboxOffset(0);
+    return selectCompany(id, signal => api(undefined, id, signal, { inbox: true }));
+  }
   useEffect(() => {
     if (!company || !startRequestAfterCompany.current) return;
     const timer = window.setTimeout(() => {
@@ -210,9 +243,11 @@ export default function CompanyWorkspace({
 
   async function createCompany(event: FormEvent) {
     event.preventDefault();
-    const next = await run("company", () => api({ action: "createCompany", name: companyName }));
+    const next = await run("company", () => api({ action: "createCompany", name: companyName }, undefined, undefined, { inbox: true }));
     if (next?.company) {
       setCompanyName("");
+      setRequestQuery("");
+      setInboxOffset(0);
       setCreatingCompany(false);
       setPanel("requests");
       setRequestView(startRequestAfterCompany.current ? "detail" : "list");
@@ -236,14 +271,15 @@ export default function CompanyWorkspace({
       attachments: uploads.map((item) => item.result),
     };
     const next = await run("receive", async () => {
-      if (!uploads.length) return api(body);
+      const query = { inbox: true, offset: inboxOffset, query: requestQuery };
+      if (!uploads.length) return api(body, company.id, undefined, query);
       const form = new FormData();
       form.append("payload", JSON.stringify(body));
       for (const item of uploads) form.append("files", item.file, item.file.name);
-      return api(form);
+      return api(form, company.id, undefined, query);
     });
     if (next?.company) {
-      const created = next.company.requests[0];
+      const created = next.company.requests.find(item => item.id === next.selectedId) ?? next.company.requests[0];
       if (created) setRequestId(created.id);
       setRequestView("detail");
       setTitle("");
@@ -263,7 +299,10 @@ export default function CompanyWorkspace({
     const submission = body.action === "saveReview" && body.review
       ? captureSave(body.review as ScopeReview)
       : undefined;
-    const next = await run(String(body.action), () => api({ ...body, companyId: company.id }));
+    const next = await run(String(body.action), () => api(
+      { ...body, companyId: company.id }, company.id, undefined,
+      { inbox: true, offset: inboxOffset, query: requestQuery, requestId: requestId || undefined },
+    ));
     if (next) {
       if (submission) {
         const hasNewEdits = acknowledgeSave(submission, next.company?.requests.find((item) => item.id === body.requestId));
@@ -279,7 +318,7 @@ export default function CompanyWorkspace({
     if (busy || (dirtyReview && !window.confirm("Discard your unsaved scope changes and reload the saved scope?"))) return;
     discardReviewDraft();
     setEditing(false);
-    const next = await load(companyId);
+    const next = await reloadWorkspace();
     if (next) setNotice("Unsaved scope changes discarded. The latest saved scope is shown.");
   }
 
@@ -426,11 +465,11 @@ export default function CompanyWorkspace({
         {data && !company && data.companies.length > 0 && (
           <div className="mb-5 flex flex-wrap items-end gap-3">
             <Field name="Switch workspace">
-              <select className={input} value={companyId} onChange={(event) => void selectCompany(event.target.value)}>
+              <select className={input} value={companyId} onChange={(event) => void switchWorkspace(event.target.value)}>
                 {data.companies.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
               </select>
             </Field>
-            <button type="button" className={secondary} disabled={!!busy} onClick={() => void load(companyId)}>Reload workspace</button>
+            <button type="button" className={secondary} disabled={!!busy} onClick={() => void reloadWorkspace()}>Reload workspace</button>
           </div>
         )}
         {creatingCompany && (
@@ -637,7 +676,7 @@ export default function CompanyWorkspace({
                       <div className="flex items-center gap-2">
                         <h2 className="text-2xl font-semibold tracking-tight">Client briefs</h2>
                         <span className="rounded-lg bg-estimator-paper px-2 py-1 text-xs font-medium text-estimator-muted">
-                          {company.requests.length}
+                          {company.insights?.total ?? company.requests.length}
                         </span>
                       </div>
                       <p className="mt-2 text-sm leading-6 text-estimator-muted">
@@ -667,13 +706,11 @@ export default function CompanyWorkspace({
                   )}
                   {requestView === "list" && (
                     <div className="flex shrink-0 flex-wrap gap-2">
-                      {sampleRequest && (
+                      {sampleRequestId && (
                         <button
                           className={secondary}
                           onClick={() => {
-                            setCreatingRequest(false);
-                            setRequestId(sampleRequest.id);
-                            setRequestView("detail");
+                            openRequest(sampleRequestId);
                           }}
                         >
                           Open sample brief
@@ -697,15 +734,17 @@ export default function CompanyWorkspace({
                 <div className="min-w-0">
                   {requestView === "list" && (
                     <RequestInbox
-                      requests={company.requests}
+                      requests={data?.inbox?.items ?? company.requests}
+                      page={data?.inbox}
+                      busy={!!busy}
+                      onPageChange={setInboxOffset}
                       query={requestQuery}
                       publicDemo={publicDemo}
-                      onQueryChange={setRequestQuery}
-                      onOpenRequest={(id) => {
-                        setCreatingRequest(false);
-                        setRequestId(id);
-                        setRequestView("detail");
+                      onQueryChange={(value) => {
+                        setRequestQuery(value);
+                        setInboxOffset(0);
                       }}
+                      onOpenRequest={openRequest}
                     />
                   )}
                   {requestView === "detail" && (
@@ -1053,7 +1092,8 @@ export default function CompanyWorkspace({
                           </button>
                         </>
                       )}
-                      {!creatingRequest && !request && (
+                      {!creatingRequest && !request && requestId && !error && <p role="status" className="flex items-center gap-2 text-sm text-estimator-muted"><Loader2 size={15} className="animate-spin"/>Loading client brief…</p>}
+                      {!creatingRequest && !request && (!requestId || error) && (
                         <Section
                           title="Request unavailable"
                           description="This request may have been removed or is no longer in this workspace."
@@ -1088,7 +1128,7 @@ export default function CompanyWorkspace({
                         onChange={(event) => {
                           setRequestView("list");
                           setCreatingRequest(false);
-                          void selectCompany(event.target.value);
+                          void switchWorkspace(event.target.value);
                         }}
                       >
                         {data!.companies.map((item) => (

@@ -98,7 +98,7 @@ export function useWorkspaceController({ guest }: { guest: boolean }) {
     }
   }, [applyResponse, begin, finish, guest, isCurrent]);
 
-  const selectCompany = useCallback((id: string) => {
+  const selectCompany = useCallback((id: string, read?: WorkspaceRead) => {
     if (id !== selection.current.companyId) {
       selection.current = { companyId: id, requestId: "", generation: selection.current.generation + 1 };
       setCompanyId(id);
@@ -106,7 +106,7 @@ export function useWorkspaceController({ guest }: { guest: boolean }) {
       setData((current) => current ? { ...current, company: undefined } : null);
       setNotice("");
     }
-    return load(id);
+    return load(id, read);
   }, [load]);
 
   const run = useCallback(async (name: string, work: () => Promise<WorkspaceResponse>) => {

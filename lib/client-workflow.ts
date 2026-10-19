@@ -524,6 +524,8 @@ export async function applyAction(
     input.requestId,
     input.expectedVersion,
   );
+  // Request commands return the changed detail if an inbox caller omitted selection.
+  if (responseQuery.inbox) responseQuery = { ...responseQuery, requestId: request.id };
   const expectedVersion = row.version;
   if (input.action === "submitDelivery" || input.action === "reviewDelivery") {
     if (request.status !== "frozen")
