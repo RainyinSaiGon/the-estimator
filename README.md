@@ -2,16 +2,26 @@
 
 Turn incoming client requests and documents into reviewed scope, explainable task effort, and frozen estimates that can be compared with actual delivery. Configure the workflow for any company; Anduin is an optional reference profile.
 
-**Demo:** [the-estimator-anduin-vu.zanyloach6.chatgpt.site](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site) · **Source:** [RainyinSaiGon/the-estimator](https://github.com/RainyinSaiGon/the-estimator)
+**[Try the live app — no login](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site/company-workspace)** · **[Watch the English pitch — 2:30](https://drive.google.com/file/d/1Q1cSkg2DO15L7w2CfSb-rGJT3wVm1J0d/view?usp=drivesdk)** · [Documentation](docs/README.md)
+
+Open a sample brief or create your own. The public workspace is shared with other visitors; use fictional briefs and sample files only.
 
 ## What it does
 
-1. Receive requests through uploads, an authorized Gmail inbox, or a signed form/CRM webhook.
-2. Use AI to extract evidence, consult approved company knowledge, and identify product fit, gaps, and questions.
-3. Review scope and task effort, then freeze the baseline.
-4. Independently review actual delivery and evaluate declared holdouts, keeping synthetic data separate.
+1. **Intake and AI analysis:** receive a brief and attachments manually or through a signed form/CRM webhook. AI consults approved company knowledge, proposes tasks, and highlights product fit, missing information, and uncertainty.
+2. **Scope review:** a person corrects findings, resolves questions, and confirms deliverables, exclusions, prerequisites, and completion criteria.
+3. **Effort calculation:** calculate low, central, and high hours per task from company templates and eligible, independently approved training history. AI proposes work; the estimator calculates hours.
+4. **Commitment and tracking:** freeze the approved baseline, track task progress and milestones, and record added scope separately. After delivery, independently review actuals and evaluate declared holdouts.
 
-The hosted [company workspace](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site/company-workspace) supports documents, signed webhooks, MCP knowledge access, organization roles, and independent delivery review. Gmail polling is deferred on Sites. [GitHub release and setup details](docs/sites-release.md) cover the hosted runtime; the Next.js, Python, and Go stack remains a separate deployment target. Estimates are planning ranges; synthetic examples do not establish predictive accuracy.
+The workflow supports **6 request types**—demo inquiry, product setup, migration, integration, customization, and support—and **8 document formats**: PDF, DOCX, XLSX, CSV, TXT, Markdown, JSON, and EML. Image-only PDFs are flagged as needing OCR; OCR is not included. Company configuration, organization roles, signed webhooks, and read-only MCP support workflows beyond the Anduin reference.
+
+## Verified demo
+
+In our verified fictional sample, The Estimator broke a client request into **6 work packages**, with **53.6 central effort hours** and a **36.9–99.8-hour planning range**. It connects **4 stages**—intake and AI analysis, scope review, effort calculation, and commitment and tracking—and supports **6 request types** and **8 document formats**, including PDF, DOCX, XLSX, and CSV.
+
+These figures demonstrate the workflow, not measured estimate accuracy or time savings. Real representative scoping cases and independently approved delivery outcomes remain pending. Synthetic examples and holdout outcomes are excluded from training-history adjustments.
+
+Gmail polling is deferred on the live Site. [GitHub release and setup details](docs/sites-release.md) cover the hosted runtime; the Next.js, Python, and Go stack remains a separate deployment target.
 
 ## Run the local preview
 
