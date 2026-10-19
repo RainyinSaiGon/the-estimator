@@ -107,6 +107,7 @@
     --signal-ink: var(--color-estimator-signal-ink);
     --accent: var(--color-estimator-accent);
     --surface-paper: var(--color-estimator-paper);
+    --paper: var(--color-estimator-paper);
     background: var(--canvas);
   }
   body { color: var(--ink); }

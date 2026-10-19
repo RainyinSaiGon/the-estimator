@@ -50,6 +50,7 @@ function output(projects: Project[], user: string): Workspace {
 function failure(error: unknown) {
   if (error instanceof z.ZodError) return Response.json({ error: error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ") }, { status: 400 });
   const message = error instanceof Error ? error.message : "The request could not be completed.";
+  if (/^Failed query:/i.test(message)) return Response.json({ error: "Your workspace is temporarily unavailable. Please try again shortly." }, { status: 503 });
   if (/no such table|binding.*unavailable/i.test(message)) return Response.json({ error: "Project storage is not ready. Apply the database migration." }, { status: 503 });
   return Response.json({ error: message }, { status: 400 });
 }

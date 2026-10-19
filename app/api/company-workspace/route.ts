@@ -7,6 +7,24 @@ import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
 
 export const dynamic = "force-dynamic";
 
+async function rejectPost(request: Request, error: string, status: number) {
+  // Consume small rejected uploads so the Worker proxy can reuse its connection.
+  // Discard chunks without buffering; cancel oversized bodies instead.
+  const reader = request.body?.getReader();
+  if (reader) {
+    try {
+      let size = 0;
+      while (true) {
+        const part = await reader.read();
+        if (part.done) break;
+        size += part.value.byteLength;
+        if (size > 256000) { await reader.cancel(); break; }
+      }
+    } catch { /* Preserve the authorization rejection if the sender disconnects. */ }
+  }
+  return Response.json({ error }, { status });
+}
+
 export async function GET(request: Request) {
   const user = await getChatGPTUser();
   if (!user) return Response.json({ error: "Sign in to open your company workspace." }, { status: 401 });
@@ -29,9 +47,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   const user = await getChatGPTUser();
-  if (!user) return Response.json({ error: "Sign in before changing company workspace data." }, { status: 401 });
+  if (!user) return rejectPost(request, "Sign in before changing company workspace data.", 401);
   const origin = request.headers.get("origin");
-  if (!origin || origin !== new URL(request.url).origin) return Response.json({ error: "This request must come from your workspace." }, { status: 403 });
+  if (!origin || origin !== new URL(request.url).origin) return rejectPost(request, "This request must come from your workspace.", 403);
   const bucket = (env as unknown as { BUCKET?: R2Bucket }).BUCKET;
   const storedKeys: string[] = [];
   let uploadedRequestId: string | undefined;
