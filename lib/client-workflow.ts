@@ -10,7 +10,8 @@ import { ClientWorkflowError } from "./workflow-errors";
 export { ClientWorkflowError } from "./workflow-errors";
 import { accessibleCompanyIds, auditStatement, companyRole, governanceStatements, governanceView, protectCredential, requireCompanyRole, textDigest, workflowDb } from "./workflow-governance";
 import { declareDeliverySplit, evaluateDeliveries } from "./workflow-evaluation";
-import { requestTypes, type ClientAnalysis, type ClientRequest, type Company, type CompanyConfig, type ScopeReview, type ScopeWorkPackage, type WorkflowEstimate, type WorkspaceResponse } from "./client-workflow-types";
+import { ensureWorkflowKnowledgeSchema, readKnowledgeFetchMetadata } from "./workflow-knowledge-store";
+import { applyApprovedTrainingHistory, requestTypes, scopeReviewBlockers, type ClientAnalysis, type ClientRequest, type Company, type CompanyConfig, type ScopeReview, type ScopeWorkPackage, type WorkflowEstimate, type WorkspaceResponse } from "./client-workflow-types";
 
 const requestTypeSchema = z.enum(requestTypes);
 const complexitySchema = z.enum(["low", "medium", "high"]);
@@ -20,7 +21,7 @@ const taskTemplateSchema = z.object({ id: taskIdSchema, label: z.string().trim()
 const productSchema = z.object({ id: taskIdSchema, name: z.string().trim().min(1).max(100), description: z.string().trim().max(1000) });
 const fieldSchema = z.object({ key: taskIdSchema, label: z.string().trim().min(1).max(100), requestTypes: z.array(requestTypeSchema).max(6), required: z.boolean(), priority: z.number().int().min(1).max(10).optional() });
 const workPackageSchema = z.object({ id: z.string().uuid(), taskId: taskIdSchema, title: z.string().trim().min(1).max(160), quantity: z.number().min(0.1).max(100), complexity: complexitySchema, owner: ownerSchema, acceptance: z.string().max(1200), dependencies: z.string().max(1200) });
-const reviewSchema = z.object({ requestType: requestTypeSchema, productId: z.string().max(80), deliverables: z.string().max(5000), exclusions: z.string().max(3000), acceptance: z.string().max(3000), dependencies: z.string().max(3000), questions: z.array(z.string().max(500)).max(20), workPackages: z.array(workPackageSchema).max(20), domain: z.string().trim().max(100).default(""), fieldAnswers: z.record(z.string().max(2000)).default({}), sourceLimitationsAcknowledged: z.boolean().default(false) });
+const reviewSchema = z.object({ requestType: requestTypeSchema, productId: z.string().max(80), deliverables: z.string().max(5000), exclusions: z.string().max(3000), acceptance: z.string().max(3000), dependencies: z.string().max(3000), questions: z.array(z.string().max(500)).max(20), questionResolutions: z.record(z.string(), z.object({ disposition: z.enum(["answered", "not_applicable"]).optional(), resolution: z.string().max(1000).default(""), question: z.string().max(500).optional() })).default({}), findingReviews: z.record(z.string(), z.object({ disposition: z.enum(["accepted", "corrected", "rejected"]), correction: z.string().max(2000).default("") })).default({}), workPackages: z.array(workPackageSchema).max(20), domain: z.string().trim().max(100).default(""), fieldAnswers: z.record(z.string().max(2000)).default({}), sourceLimitationsAcknowledged: z.boolean().default(false) });
 const actionSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("createCompany"), name: z.string().trim().min(2).max(120) }),
   z.object({ action: z.literal("createRequest"), requestId: z.string().uuid().optional(), uploadVerified: z.literal(true).optional(), companyId: z.string().uuid(), title: z.string().trim().min(3).max(200), cohort: z.enum(["synthetic", "recorded"]).default("recorded"), text: z.string().trim().max(20000).default(""), attachments: z.array(z.object({ id: z.string().uuid(), name: z.string().min(1).max(200), type: z.string().min(1).max(16), size: z.number().int().positive().max(10 * 1024 * 1024), sha256: z.string().regex(/^[a-f0-9]{64}$/), text: z.string().max(40000), status: z.enum(["extracted", "needs_attention", "ocr_required"]), message: z.string().max(1000).optional(), locators: z.array(z.string().max(100)).max(200), truncated: z.boolean(), objectKey: z.string().min(1).max(500) })).max(10).default([]) }),
@@ -106,19 +107,33 @@ export async function getWorkspace(actorId: string, companyId?: string): Promise
   const roles = await Promise.all(companies.map(row => companyRole(row.id, actorId)));
   const summary = await Promise.all(companies.map(async (row, index) => ({ id: row.id, name: row.name, version: row.version, role: roles[index]!, requestCount: (await workflowDb().prepare("SELECT COUNT(*) AS n FROM workflow_requests WHERE company_id = ?").bind(row.id).first<{ n: number }>())?.n ?? 0 })));
   const publicRequests = requests.map(parseRequest).map(publicRequest);
+  const knowledgeMetadata = selected ? (await ensureWorkflowKnowledgeSchema(), await readKnowledgeFetchMetadata(selected.id)) : {};
+  const selectedCompany = selected ? parseCompany(selected) : undefined;
+  if (selectedCompany) selectedCompany.knowledge = selectedCompany.knowledge.map(source => ({
+    ...source,
+    ...(knowledgeMetadata[source.id] ? {
+      retrievedAt: knowledgeMetadata[source.id]!.retrievedAt,
+      contentType: knowledgeMetadata[source.id]!.contentType,
+      truncated: knowledgeMetadata[source.id]!.truncated,
+    } : {}),
+  }));
   return {
     companies: summary,
     actorId,
     aiReady: Boolean(aiConfig().key),
-    ...(selected ? { company: { ...parseCompany(selected), role: roles[companies.findIndex(row => row.id === selected.id)]!, ...await governanceView(selected.id, selected.ownerId), requests: publicRequests, evaluation: evaluateDeliveries(publicRequests) } } : {}),
+    ...(selected && selectedCompany ? { company: { ...selectedCompany, role: roles[companies.findIndex(row => row.id === selected.id)]!, ...await governanceView(selected.id, selected.ownerId), requests: publicRequests, evaluation: evaluateDeliveries(publicRequests) } } : {}),
   };
 }
 
 async function ownedCompany(ownerId: string, companyId: string): Promise<Company> {
   const role = await companyRole(companyId, ownerId);
   if (!role) throw new ClientWorkflowError("Company workspace not found.", 404);
+  await ensureWorkflowKnowledgeSchema();
   const [row] = await getDb().select().from(workflowCompanies).where(eq(workflowCompanies.id, companyId)).limit(1);
-  return { ...parseCompany(row), role, ...await governanceView(companyId, row.ownerId) };
+  const company = parseCompany(row);
+  const metadata = await readKnowledgeFetchMetadata(companyId);
+  company.knowledge = company.knowledge.map(source => ({ ...source, ...(metadata[source.id] ? { retrievedAt: metadata[source.id]!.retrievedAt, contentType: metadata[source.id]!.contentType, truncated: metadata[source.id]!.truncated } : {}) }));
+  return { ...company, role, ...await governanceView(companyId, row.ownerId) };
 }
 async function ownedRequest(ownerId: string, companyId: string, requestId: string, expectedVersion?: number) {
   await ownedCompany(ownerId, companyId);
@@ -219,23 +234,35 @@ async function runAI(text: string, company: Company): Promise<ClientAnalysis> {
 }
 
 function reviewFromAnalysis(analysis: ClientAnalysis): ScopeReview {
-  return { requestType: analysis.requestType, productId: analysis.productId, deliverables: analysis.deliverables, exclusions: analysis.exclusions, acceptance: analysis.acceptance, dependencies: analysis.dependencies, questions: analysis.questions, workPackages: analysis.workPackages, confirmed: false, confirmedBy: "", domain: analysis.requestType, fieldAnswers: {} };
+  return { requestType: analysis.requestType, productId: analysis.productId, deliverables: analysis.deliverables, exclusions: analysis.exclusions, acceptance: analysis.acceptance, dependencies: analysis.dependencies, questions: analysis.questions, questionResolutions: {}, findingReviews: {}, workPackages: analysis.workPackages, confirmed: false, confirmedBy: "", domain: analysis.requestType, fieldAnswers: {} };
 }
 
 function requestMaterial(request: ClientRequest) {
   return [request.text ? `[Source: Client message]\n${request.text}` : "", ...request.attachments.map(file => file.text ? `[Source file: ${file.name}; type: ${file.type}; references: ${file.locators.join(", ")}]\n${file.text}` : `[Source file: ${file.name}; extraction status: ${file.status}; ${file.message ?? "No extracted text."}`)].filter(Boolean).join("\n\n");
 }
 
-function makeEstimate(review: ScopeReview, company: Company): WorkflowEstimate {
+function makeEstimate(review: ScopeReview, company: Company, history: readonly ClientRequest[]): WorkflowEstimate {
   const templates = new Map(company.config.tasks.map(task => [task.id, task]));
   const factor: Record<ScopeWorkPackage["complexity"], number> = { low: 0.75, medium: 1, high: 1.6 };
   const tasks = review.workPackages.map(item => {
     const template = templates.get(item.taskId);
     if (!template) throw new ClientWorkflowError(`The task template for ${item.title} no longer exists. Review the scope again.`);
     const baseHours = Number((template.baseHours * item.quantity * factor[item.complexity]).toFixed(1));
-    return { templateId: template.id, label: item.title || template.label, quantity: item.quantity, baseHours, lowHours: Number((baseHours * template.lowFactor).toFixed(1)), highHours: Number((baseHours * template.highFactor).toFixed(1)), complexity: item.complexity, assumptions: [`${template.baseHours} h per unit before the ${item.complexity} complexity factor`, `Planning range uses configured factors ${template.lowFactor}–${template.highFactor}; it is not calibrated from held-out outcomes.`] };
+    return { templateId: template.id, label: item.title || template.label, quantity: item.quantity, baseHours, lowHours: Number((baseHours * template.lowFactor).toFixed(1)), highHours: Number((baseHours * template.highFactor).toFixed(1)), complexity: item.complexity, assumptions: [`${template.baseHours} h per unit before the ${item.complexity} complexity factor`, `Planning range uses configured factors ${template.lowFactor}–${template.highFactor} before any eligible training-history adjustment; holdout outcomes are never used.`] };
   });
-  return { tasks, baseHours: Number(tasks.reduce((sum, item) => sum + item.baseHours, 0).toFixed(1)), lowHours: Number(tasks.reduce((sum, item) => sum + item.lowHours, 0).toFixed(1)), highHours: Number(tasks.reduce((sum, item) => sum + item.highHours, 0).toFixed(1)), configVersion: company.config.version, engineVersion: "sites-planning/1.0", calibration: "uncalibrated" };
+  const learned = applyApprovedTrainingHistory(tasks, review, history);
+  return { tasks: learned.tasks, baseHours: Number(tasks.reduce((sum, item) => sum + item.baseHours, 0).toFixed(1)), lowHours: Number(tasks.reduce((sum, item) => sum + item.lowHours, 0).toFixed(1)), highHours: Number(tasks.reduce((sum, item) => sum + item.highHours, 0).toFixed(1)), adjustedHours: learned.adjustedHours, adjustedLowHours: learned.adjustedLowHours, adjustedHighHours: learned.adjustedHighHours, configVersion: company.config.version, engineVersion: "sites-planning/1.1", calibration: learned.calibration, calibrationSummary: learned.calibrationSummary };
+}
+
+function scopeReadinessBlockers(request: ClientRequest, company: Company): string[] {
+  if (!request.analysis) return ["Analyze the request before confirming or estimating its scope."];
+  const blockers = scopeReviewBlockers(request.review, request.analysis);
+  if (!request.review.deliverables.trim()) blockers.push("Add at least one deliverable before confirming the scope.");
+  if (!request.review.domain?.trim()) blockers.push("Add a reviewed work domain before confirming the scope.");
+  const missing = company.config.fields.filter(field => field.required && field.requestTypes.includes(request.review.requestType) && !request.review.fieldAnswers?.[field.key]?.trim());
+  if (missing.length) blockers.push(`Complete required fields: ${missing.map(field => field.label).join(", ")}.`);
+  if (request.attachments.some(file => file.status !== "extracted" || file.truncated) && !request.review.sourceLimitationsAcknowledged) blockers.push("Reconcile incomplete sources and acknowledge their limitations before confirming scope.");
+  return blockers;
 }
 
 export async function applyAction(actorId: string, userName: string, raw: unknown, inbound?: { submissionId: string; payloadDigest: string }): Promise<WorkspaceResponse> {
@@ -382,22 +409,24 @@ export async function applyAction(actorId: string, userName: string, raw: unknow
     request.estimate = undefined; request.status = "needs_review";
     await saveRequest(ownerId, request, expectedVersion, company.id, actorId, input.action);
   } else if (input.action === "confirmScope") {
-    if (!request.analysis) throw new ClientWorkflowError("Analyze the request before confirming its scope.");
-    if (!request.review.deliverables.trim()) throw new ClientWorkflowError("Add at least one deliverable before confirming the scope.");
-    if (!request.review.domain?.trim()) throw new ClientWorkflowError("Add a reviewed work domain before confirming the scope.");
-    const missing = company.config.fields.filter(field => field.required && field.requestTypes.includes(request.review.requestType) && !request.review.fieldAnswers?.[field.key]?.trim());
-    if (missing.length) throw new ClientWorkflowError(`Complete required fields: ${missing.map(field => field.label).join(", ")}.`);
-    if (request.attachments.some(file => file.status !== "extracted" || file.truncated) && !request.review.sourceLimitationsAcknowledged) throw new ClientWorkflowError("Reconcile incomplete sources and acknowledge their limitations before confirming scope.");
+    const scopeBlockers = scopeReadinessBlockers(request, company);
+    if (scopeBlockers.length) throw new ClientWorkflowError(scopeBlockers.join(" "));
     request.review = { ...request.review, confirmed: true, confirmedBy: userName, confirmedAt: at, confirmedConfigVersion: company.config.version, confirmedCompanyVersion: company.version };
     request.estimate = undefined; request.status = "scope_confirmed";
     await saveRequest(ownerId, request, expectedVersion, company.id, actorId, input.action);
   } else if (input.action === "estimate") {
+    const scopeBlockers = scopeReadinessBlockers(request, company);
+    if (scopeBlockers.length) throw new ClientWorkflowError(scopeBlockers.join(" "));
     if (!request.review.confirmed) throw new ClientWorkflowError("Confirm the reviewed scope before calculating effort.");
     if (!request.review.workPackages.length) throw new ClientWorkflowError("Add at least one work package before estimating.");
     if (request.review.confirmedConfigVersion !== company.config.version || request.review.confirmedCompanyVersion !== company.version) throw new ClientWorkflowError("Company configuration or knowledge changed. Edit and confirm the scope again.");
-    request.estimate = makeEstimate(request.review, company); request.status = "estimated";
+    const historyRows = await getDb().select().from(workflowRequests).where(eq(workflowRequests.companyId, company.id));
+    const history = historyRows.filter(item => item.id !== request.id).map(parseRequest);
+    request.estimate = makeEstimate(request.review, company, history); request.status = "estimated";
     await saveRequest(ownerId, request, expectedVersion, company.id, actorId, input.action);
   } else if (input.action === "freeze") {
+    const scopeBlockers = scopeReadinessBlockers(request, company);
+    if (scopeBlockers.length) throw new ClientWorkflowError(scopeBlockers.join(" "));
     if (!request.review.confirmed || !request.estimate) throw new ClientWorkflowError("Confirm the scope and calculate effort before freezing a baseline.");
     if (request.estimate.configVersion !== company.config.version || request.review.confirmedCompanyVersion !== company.version) throw new ClientWorkflowError("Company configuration or knowledge changed. Review the scope and recalculate before freezing.");
     const evaluation = await declareDeliverySplit(company.id, request.id, request.cohort ?? "synthetic", request.review.domain!, at);

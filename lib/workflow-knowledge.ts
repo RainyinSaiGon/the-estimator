@@ -1,10 +1,13 @@
 import type { CompanyConfig, KnowledgeSource } from "./client-workflow-types";
 
-export function searchApprovedKnowledge(sources: KnowledgeSource[], query: string) {
+export type KnowledgeSourceRetrieval = { retrievedAt?: string; sha256?: string };
+
+export function searchApprovedKnowledge(sources: KnowledgeSource[], query: string, retrieval: Record<string, KnowledgeSourceRetrieval> = {}) {
   const terms = [...new Set(query.toLowerCase().match(/[\p{L}\p{N}_-]{2,}/gu) ?? [])].slice(0, 30);
   return sources.filter(source => source.status === "approved").flatMap(source => {
     const paragraphs = source.text.match(/[\s\S]{1,2000}/g) ?? [];
-    return paragraphs.map((text, index) => ({ sourceId: source.id, passageId: `${source.id}:${index + 1}`, title: source.title, url: source.url, text, sha256: source.sha256, approvedAt: source.approvedAt, retrievedAt: new Date().toISOString(), score: terms.filter(term => text.toLowerCase().includes(term)).length }));
+    const sourceMetadata = retrieval[source.id];
+    return paragraphs.map((text, index) => ({ sourceId: source.id, passageId: `${source.id}:${index + 1}`, title: source.title, url: source.url, text, sha256: sourceMetadata?.sha256 ?? source.sha256, approvedAt: source.approvedAt, addedAt: source.addedAt, ...(sourceMetadata?.retrievedAt ? { retrievedAt: sourceMetadata.retrievedAt } : {}), score: terms.filter(term => text.toLowerCase().includes(term)).length }));
   }).filter(passage => passage.score > 0).sort((a, b) => b.score - a.score || a.passageId.localeCompare(b.passageId)).slice(0, 10);
 }
 

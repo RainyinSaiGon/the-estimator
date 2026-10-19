@@ -14,14 +14,15 @@ The native Next.js/Go/Python/Postgres application in `apps/web` and `services` i
 
 ## Live workflow
 
-- Requests: AI-only intake, private PDF/DOCX/XLSX/CSV/text files, evidence references, editable reviewed scope, conditional required answers, task effort and immutable baselines.
-- Knowledge and settings: administrator-approved source versions and configurable company-neutral fields, priorities, products, capabilities and task priors. Company intake JSON Schema is available from Connectors.
+- Requests: one AI-only entry point into the company workflow, private PDF/DOCX/XLSX/CSV/text files, evidence references, editable reviewed scope, resolved-question and finding review gates, conditional required answers, task effort and immutable baselines. PDF selectable text is extracted with page references; image-only PDFs are flagged for OCR, which is not provided.
+- Knowledge and settings: administrators can allow exact hostnames, fetch bounded public HTTPS HTML/text/Markdown/JSON as draft, inspect and approve each version, and re-fetch to create a new draft. Findings and MCP results show source URL, evidence, digest and retrieval date. The domain allowlist must contain trusted official sources; the Worker checks public DNS answers but cannot pin the resolved address during its outbound fetch. Configuration remains versioned and company-neutral across fields, priorities, products, capabilities and task priors. Company intake JSON Schema is available from Connectors.
 - Members: stable Site account IDs with administrator, estimator, reviewer and viewer roles. A new member signs in, shares their Site account ID, and an administrator adds that ID. Email addresses are not authorization identifiers.
 - Connectors: signed demo-form/CRM intake with event deduplication; read-only MCP tools for approved knowledge and the intake schema. Gmail polling is deferred in the Sites implementation.
+- Estimation: configured task priors are adjusted by the median actual-to-estimate ratio from comparable, independently approved recorded training projects. A task needs at least three distinct projects; factors are bounded from 0.5× to 2×. Matching uses reviewed domain, request type, task template and complexity. Holdout, synthetic, self-reviewed, invalid and non-comparable outcomes are excluded. The estimate records its sample count and source baseline IDs. Staffing-based calendar dates are not provided because availability calendars are not configured.
 - Delivery: original task actuals, separate added scope, evidence and a designated different reviewer. The API rejects self-review, stale versions and changes/deletion of frozen records. Rejected actuals remain in history.
 - Evaluation: split fixed at baseline freeze using `sha256(the-estimator-delivery-holdout-v1:<record-id>)[0] % 5 == 0`; holdout is 20%. Recorded and synthetic cohorts stay separate. Export JSONL from Evaluation and recompute with `python evaluation/evaluate_delivery_holdout.py --records <private-export>`.
 
-This Sites engine uses configured task priors without learned adjustment. Base and adjusted predictions are identical. No delivery outcomes tune its policy or select its reported method. A small recorded cohort cannot establish accuracy or improvement. Issues #38 and #39 still require real representative independently approved evidence.
+The training adjustment is a transparent descriptive factor, not a claim of improved accuracy. Holdout outcomes never tune estimates. A small recorded cohort cannot establish accuracy or improvement. Issues #38 and #39 still require real representative independently approved evidence.
 
 ## Webhook activation
 
@@ -29,7 +30,7 @@ An administrator configures the external form/CRM sender; access to Anduin's sub
 
 Sign the exact UTF-8 bytes `timestamp + "." + rawBody` with HMAC-SHA256. Headers are `X-Workflow-Timestamp` (RFC3339 UTC), `X-Workflow-Signature` (hex), and `Content-Type: application/json`. Timestamps expire after five minutes. Rotation/revocation invalidates old secrets. Accepted requests start analysis automatically; provider failures stay visible and can be retried from Requests.
 
-Webhook payloads are bounded to 5 MB, ten files, 2 MB each and 4 MB combined. DOCX, XLSX, CSV and text adapters run server-side. Webhook PDF originals are stored and flagged as incomplete; upload through Requests for page-aware extraction. Incomplete sources must be reconciled and acknowledged before scope confirmation. OCR and legacy DOC/XLS are not provided.
+Webhook payloads are bounded to 5 MB, ten files, 2 MB each and 4 MB combined. DOCX, XLSX, CSV, text and selectable-text PDF adapters run server-side; PDF pages retain references, and image-only PDFs are flagged as requiring OCR. A retry with the same event ID and payload retries a failed analysis on the original request. Changed content under the same ID remains a conflict. Incomplete sources must be reconciled and acknowledged before scope confirmation. OCR and legacy DOC/XLS are not provided.
 
 ## Secrets, data and limits
 

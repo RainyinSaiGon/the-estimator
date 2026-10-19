@@ -1,7 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useRouter } from "next/navigation";
+import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { ArrowLeft, Check, CheckCircle2, ClipboardList, FileText, History, Layers3, Loader2, Plug, Plus, Settings2, ShieldCheck, Sparkles, Users, WandSparkles, X } from "lucide-react";
 import type { ClientRequest, Company, CompanyConfig, ScopeReview, ScopeWorkPackage, WorkspaceResponse } from "../../lib/client-workflow-types";
 import { extractClientFile, type ExtractedUpload } from "../../lib/browser-document-extraction";
@@ -25,6 +26,23 @@ const typeLabel: Record<string, string> = { demo: "Demo inquiry", setup: "Produc
 type UploadItem = { file: File; result?: ExtractedUpload; error?: string };
 
 function Field({ name, children }: { name: string; children: ReactNode }) { return <label className={label}>{name}{children}</label>; }
+type QuestionResolution = NonNullable<ScopeReview["questionResolutions"]>[string];
+type FindingReview = NonNullable<ScopeReview["findingReviews"]>[string];
+function QuestionReviewEditor({ question, value, disabled, onChange, onRemove }: { question: string; value?: QuestionResolution; disabled: boolean; onChange: (value: QuestionResolution) => void; onRemove?: () => void }) {
+  return <article className="rounded-xl border border-amber-200 bg-white p-3">
+    <div className="flex items-start justify-between gap-3"><p className="min-w-0 text-sm leading-6">{question}</p>{onRemove && <button className="shrink-0 text-xs font-medium text-red-800 underline" type="button" disabled={disabled} onClick={onRemove}>Remove</button>}</div>
+    <div className="mt-3 grid gap-3 sm:grid-cols-[minmax(0,200px)_minmax(0,1fr)]">
+      <Field name="Review status"><select className={input} disabled={disabled} value={value?.disposition ?? ""} onChange={event => onChange({ ...value, disposition: (event.target.value || undefined) as QuestionResolution["disposition"], resolution: value?.resolution ?? "", ...(value?.question ? { question: value.question } : {}) })}><option value="">Needs a decision</option><option value="answered">Answered</option><option value="not_applicable">Not applicable</option></select></Field>
+      <Field name="Answer or reason it does not apply"><textarea className={input} rows={2} disabled={disabled} required value={value?.resolution ?? ""} onChange={event => onChange({ ...value, resolution: event.target.value, ...(value?.question ? { question: value.question } : {}) })} placeholder="Record the decision or remaining prerequisite…" /></Field>
+    </div>
+  </article>;
+}
+function FindingReviewEditor({ value, disabled, onChange }: { value?: FindingReview; disabled: boolean; onChange: (value: FindingReview) => void }) {
+  return <div className="mt-3 grid gap-3 sm:grid-cols-2">
+    <Field name="Reviewer decision"><select className={input} disabled={disabled} value={value?.disposition ?? ""} onChange={event => onChange({ ...value, disposition: (event.target.value || undefined) as FindingReview["disposition"], correction: value?.correction ?? "" })}><option value="">Needs a decision</option><option value="accepted">Accept finding</option><option value="corrected">Correct finding</option><option value="rejected">Reject finding</option></select></Field>
+    {(value?.disposition === "corrected" || value?.disposition === "rejected") && <Field name={value.disposition === "corrected" ? "Correction" : "Reason for rejection"}><textarea className={input} rows={2} required disabled={disabled} value={value.correction} onChange={event => onChange({ ...value, correction: event.target.value })} placeholder="Keep the reviewer’s correction separate from the AI result…" /></Field>}
+  </div>;
+}
 function reviewForEditor(request: ClientRequest, products: CompanyConfig["products"]): ScopeReview {
   const review = structuredClone(request.review);
   if (request.status !== "frozen") review.productId = configuredProductId(review.productId, products);
@@ -47,6 +65,7 @@ function Progress({ request }: { request: ClientRequest }) {
 }
 
 export default function CompanyWorkspace({ userName, guest = false }: { userName: string; guest?: boolean }) {
+  const router = useRouter();
   const [data, setData] = useState<WorkspaceResponse | null>(null);
   const [panel, setPanel] = useState<Panel>("requests");
   const [companyId, setCompanyId] = useState("");
@@ -54,11 +73,13 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
   const [creatingCompany, setCreatingCompany] = useState(false);
   const [creatingRequest, setCreatingRequest] = useState(false);
   const [companyName, setCompanyName] = useState("");
+  const startRequestAfterCompany = useRef(typeof window !== "undefined" && new URLSearchParams(window.location.search).get("new") === "1");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [title, setTitle] = useState("");
   const [text, setText] = useState("");
+  const [reviewerQuestion, setReviewerQuestion] = useState("");
   const [cohort, setCohort] = useState<"synthetic" | "recorded">("synthetic");
   const [uploads, setUploads] = useState<UploadItem[]>([]);
   const [processingUploads, setProcessingUploads] = useState(false);
@@ -77,15 +98,30 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
       const nextCompany = next.company;
       setCompanyId(nextCompany?.id ?? "");
       setRequestId(current => nextCompany?.requests.some(item => item.id === current) ? current : nextCompany?.requests[0]?.id ?? "");
+      if (nextCompany && startRequestAfterCompany.current) {
+        setPanel("requests"); setCreatingCompany(false); setCreatingRequest(true); setRequestId("");
+        startRequestAfterCompany.current = false;
+      }
     } catch (cause) { setError(cause instanceof Error ? cause.message : "Could not open company workspace."); }
     finally { setBusy(""); }
   }, [companyId, guest]);
 
   useEffect(() => { const timer = window.setTimeout(() => void load(), 0); return () => window.clearTimeout(timer); }, [load]);
   useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    if (query.has("new") || query.has("view")) {
+      query.delete("new");
+      query.delete("view");
+      const queryString = query.toString();
+      const suffix = queryString ? `?${queryString}` : "";
+      window.history.replaceState(null, "", `${window.location.pathname}${suffix}`);
+    }
+  }, []);
+  useEffect(() => {
     const timer = window.setTimeout(() => {
-      if (!request) { setReview(null); return; }
+      if (!request) { setReview(null); setReviewerQuestion(""); return; }
       setReview(reviewForEditor(request, company?.config.products ?? [])); setEditing(false);
+      setReviewerQuestion("");
     }, 0);
     return () => window.clearTimeout(timer);
   }, [request, company?.config.products]);
@@ -100,6 +136,10 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
         setCompanyId(nextCompany.id);
         if (requestId && nextCompany.requests.some(item => item.id === requestId)) setRequestId(requestId);
         else if (nextCompany.requests[0]) setRequestId(nextCompany.requests[0].id);
+        if (startRequestAfterCompany.current) {
+          setPanel("requests"); setCreatingCompany(false); setCreatingRequest(true); setRequestId("");
+          startRequestAfterCompany.current = false;
+        }
       }
       return next;
     } catch (cause) { setError(cause instanceof Error ? cause.message : "The workspace request failed."); return undefined; }
@@ -153,15 +193,62 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
 
   const steps = request?.analysis?.run.steps ?? [];
   const unsavedScope = !!request && !!review && JSON.stringify(review) !== JSON.stringify(request.review);
+  const questionResolutions = review?.questionResolutions ?? {};
+  const findingReviews = review?.findingReviews ?? {};
+  const questionRows = request?.analysis?.questions.map((question, index) => ({
+    key: `analysis:${index}`,
+    question,
+    value: questionResolutions[`analysis:${index}`],
+  })) ?? [];
+  const reviewerQuestionRows = Object.entries(questionResolutions)
+    .filter(([key, value]) => key.startsWith("review:") && value.question?.trim())
+    .map(([key, value]) => ({ key, question: value.question!, value }));
+  const unresolvedQuestions = [...questionRows, ...reviewerQuestionRows].filter(({ value }) =>
+    !value?.disposition || !value.resolution.trim(),
+  ).length;
+  const findingKeys = request?.analysis ? [
+    ...request.analysis.facts.map((_, index) => `fact:${index}`),
+    ...request.analysis.productFindings.map((_, index) => `product:${index}`),
+    ...request.analysis.capabilityFindings.map((_, index) => `capability:${index}`),
+    ...request.analysis.assumptions.map((_, index) => `assumption:${index}`),
+    ...request.analysis.conflicts.map((_, index) => `conflict:${index}`),
+  ] : [];
+  const unreviewedFindings = findingKeys.filter(key => {
+    const finding = findingReviews[key];
+    return !finding?.disposition || ((finding.disposition === "corrected" || finding.disposition === "rejected") && !finding.correction.trim());
+  }).length;
+  const missingRequiredFields = review && company ? company.config.fields.filter(field =>
+    field.required && field.requestTypes.includes(review.requestType) && !review.fieldAnswers?.[field.key]?.trim(),
+  ).map(field => field.label) : [];
+  const reviewBlockers = review ? [
+    ...(!review.deliverables.trim() ? ["Add at least one deliverable."] : []),
+    ...(!review.domain?.trim() ? ["Set the reviewed work domain."] : []),
+    ...(!review.acceptance.trim() ? ["Write the overall completion criteria."] : []),
+    ...(!review.dependencies.trim() ? ["State the prerequisites and owners, or enter “None identified.”"] : []),
+    ...(review.workPackages.length === 0 ? ["Add at least one work package."] : []),
+    ...(review.workPackages.some(item => !item.acceptance.trim()) ? ["Add completion criteria to each work package."] : []),
+    ...(review.workPackages.some(item => !item.dependencies.trim()) ? ["State prerequisites for each work package, or enter “None identified.”"] : []),
+    ...(unresolvedQuestions ? [`Resolve all ${unresolvedQuestions} open question${unresolvedQuestions === 1 ? "" : "s"}.`] : []),
+    ...(unreviewedFindings ? [`Review all ${unreviewedFindings} AI finding${unreviewedFindings === 1 ? "" : "s"}.`] : []),
+    ...(missingRequiredFields.length ? [`Complete required fields: ${missingRequiredFields.join(", ")}.`] : []),
+    ...(request?.attachments.some(file => file.status !== "extracted" || file.truncated) && !review.sourceLimitationsAcknowledged ? ["Reconcile incomplete source files and acknowledge their limitations."] : []),
+  ] : [];
 
-  if (guest) return <main className="mx-auto flex min-h-dvh w-full max-w-3xl items-center justify-center px-5 py-12 font-sans sm:px-8"><section className={card + " w-full text-center !p-8 sm:!p-12"}><Sparkles className="mx-auto mb-4" /><p className="text-xs uppercase tracking-[.18em] text-[var(--muted)]">Company request workflow</p><h1 className="mt-2 text-3xl font-medium tracking-tight">Sign in to open your workspace</h1><p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[var(--muted)]">Requests, evidence and frozen estimates are available only to your signed-in workspace.</p><a className={button + " mt-6"} href="/signin-with-chatgpt?return_to=%2Fcompany-workspace">Sign in with ChatGPT</a><p className="mt-4"><Link className="text-sm underline" href="/">Back to The Estimator</Link></p></section></main>;
+  function changeQuestionResolution(key: string, value: NonNullable<ScopeReview["questionResolutions"]>[string]) {
+    setReview(current => current && ({ ...current, questionResolutions: { ...current.questionResolutions, [key]: value }, confirmed: false }));
+  }
+  function changeFindingReview(key: string, value: NonNullable<ScopeReview["findingReviews"]>[string]) {
+    setReview(current => current && ({ ...current, findingReviews: { ...current.findingReviews, [key]: value }, confirmed: false }));
+  }
+
+  if (guest) return <main className="mx-auto flex min-h-dvh w-full max-w-3xl items-center justify-center px-5 py-12 font-sans sm:px-8"><section className={card + " w-full text-center !p-8 sm:!p-12"}><Sparkles className="mx-auto mb-4" /><p className="text-xs uppercase tracking-[.18em] text-[var(--muted)]">Company request workflow</p><h1 className="mt-2 text-3xl font-medium tracking-tight">Sign in to open your workspace</h1><p className="mx-auto mt-3 max-w-xl text-sm leading-7 text-[var(--muted)]">Requests, evidence and frozen estimates are available only to your signed-in workspace.</p><a className={button + " mt-6"} href="/signin-with-chatgpt?return_to=%2Fcompany-workspace" onClick={event => { event.preventDefault(); const newRequest = startRequestAfterCompany.current || new URLSearchParams(window.location.search).get("new") === "1"; const returnTo = newRequest ? "/company-workspace?new=1" : "/company-workspace"; router.push(`/signin-with-chatgpt?return_to=${encodeURIComponent(returnTo)}`); }}>Sign in with ChatGPT</a></section></main>;
 
   return <main id="company-main" className="mx-auto flex min-h-dvh w-full max-w-[1280px] flex-col px-5 py-6 font-sans sm:px-8 lg:px-10">
     <a className="sr-only focus:not-sr-only focus:mb-4 focus:rounded-full focus:bg-estimator-ink focus:px-4 focus:py-3 focus:text-white" href="#company-content">Skip to workspace content</a>
     <header className="mb-8 flex flex-wrap items-center justify-between gap-5 border-b border-estimator-line pb-6">
       <div className="flex min-w-0 items-center gap-3">
-        <Link href="/" aria-label="Back to overview" className="grid size-11 shrink-0 place-items-center rounded-full border border-estimator-line bg-white transition hover:bg-estimator-paper"><ArrowLeft size={17} /></Link>
-        <div className="min-w-0"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 text-xl font-medium leading-tight tracking-tight sm:text-2xl">Company workspace</h1></div>
+        <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-full bg-estimator-signal text-estimator-signal-ink"><Layers3 size={20} /></span>
+        <div className="min-w-0"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 text-xl font-medium leading-tight tracking-tight sm:text-2xl">Request workspace</h1></div>
       </div>
       <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">
         {data?.companies.length ? <select aria-label="Company workspace" className="min-h-11 w-full min-w-0 rounded-xl border border-estimator-line bg-white px-3 py-2 text-sm sm:w-60" value={companyId} onChange={event => { setRequestId(""); setCompanyId(event.target.value); void load(event.target.value); }}><option value="">Choose a company</option>{data.companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
@@ -178,7 +265,11 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
 
     {company && !creatingCompany && <>
       <div className="mb-7 flex flex-wrap items-end justify-between gap-4"><div className="min-w-0"><p className="text-[10px] font-medium uppercase tracking-[.18em] text-estimator-muted">{company.role} · configuration v{company.config.version}</p><h2 className="mt-2 break-words text-2xl font-medium tracking-tight sm:text-3xl">{company.name}</h2><p className="mt-2 text-xs text-estimator-muted">Signed in as {userName}</p></div></div>
-      <nav aria-label="Company sections" className="mb-7 grid max-w-full grid-cols-4 gap-1 border-b border-estimator-line sm:flex sm:flex-wrap">{panels.map(({ id, title, icon: Icon }) => <button key={id} aria-current={panel === id ? "page" : undefined} className={`inline-flex min-h-16 min-w-0 flex-col items-center justify-center gap-2 border-b-2 px-1 py-3 text-[11px] font-medium transition sm:min-h-12 sm:flex-row sm:px-4 sm:text-xs ${panel === id ? "border-estimator-ink text-estimator-ink" : "border-transparent text-estimator-muted hover:border-estimator-line hover:text-estimator-ink"}`} onClick={() => { setPanel(id); setNotice(""); setError(""); }}><Icon size={15} />{title}</button>)}</nav>
+      <nav aria-label="Company sections" className="mb-7 grid max-w-full grid-cols-4 gap-1 border-b border-estimator-line sm:flex sm:flex-wrap">{panels.map(({ id, title, icon: Icon }) => {
+        const className = `inline-flex min-h-16 min-w-0 flex-col items-center justify-center gap-2 border-b-2 px-1 py-3 text-[11px] font-medium transition sm:min-h-12 sm:flex-row sm:px-4 sm:text-xs ${panel === id ? "border-estimator-ink text-estimator-ink" : "border-transparent text-estimator-muted hover:border-estimator-line hover:text-estimator-ink"}`;
+        if (id === "knowledge") return <Link key={id} href={`/company-workspace/knowledge?company=${encodeURIComponent(company.id)}`} className={className}><Icon size={15} />Approved knowledge</Link>;
+        return <button key={id} aria-current={panel === id ? "page" : undefined} className={className} onClick={() => { setPanel(id); setNotice(""); setError(""); }}><Icon size={15} />{title}</button>;
+      })}</nav>
       {busy && <p className="mb-4 flex items-center gap-2 text-sm text-[var(--muted)]" role="status"><Loader2 size={15} className="animate-spin" />{busy === "receive" ? "Analyzing request with AI…" : busy === "analyze" ? "Retrying AI analysis…" : "Saving changes…"}</p>}
 
       {panel === "requests" && <div className="grid items-start gap-6 lg:grid-cols-[240px_minmax(0,1fr)]">
@@ -195,31 +286,41 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
               <Progress request={request} />
               {request.analysisError && <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p>{request.analysisError}</p><button className="mt-2 font-medium underline" disabled={!!busy} onClick={() => void action({ action: "analyze", requestId: request.id, expectedVersion: request.version }, "AI analysis completed. Review its findings.")}>Retry AI analysis</button></div>}
               {request.analysis && <div className="mt-5 grid gap-4 md:grid-cols-2"><div className="rounded-xl bg-[var(--paper)] p-4 md:col-span-2"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">AI summary · provisional</p><p className="mt-2 text-sm leading-6">{request.analysis.summary}</p><p className="mt-2 text-xs text-[var(--muted)]">Steps: {steps.join(" · ")} · {request.analysis.run.model} · {(request.analysis.run.elapsedMs / 1000).toFixed(1)}s</p></div>
-                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Source-backed facts</h3>{request.analysis.facts.length ? <ul className="mt-3 space-y-3">{request.analysis.facts.map((fact, index) => <li key={index} className="border-t border-[var(--line)] pt-2"><p className="text-sm"><strong>{fact.key.replaceAll("_", " ")}:</strong> {fact.value} <span className="text-[10px] uppercase text-[var(--muted)]">{fact.status} · {fact.source}</span></p>{fact.evidence && <blockquote className="mt-1 border-l-2 border-neutral-400 pl-2 text-xs leading-5 text-[var(--muted)]">“{fact.evidence}”</blockquote>}</li>)}</ul> : <p className="mt-2 text-sm text-[var(--muted)]">No directly attributable facts were extracted.</p>}</div>
-                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Product and capability fit</h3>{!company.knowledge.some(item => item.status === "approved") && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">No approved product knowledge is configured. Fit remains unknown.</p>}{request.analysis.productFindings.map((finding,index) => { const source=company.knowledge.find(item=>item.id===finding.sourceId); return <p key={index} className="mt-2 text-sm"><strong>{finding.status}:</strong> {finding.explanation}{source && <span className="mt-1 block text-xs text-[var(--muted)]">Source: {source.url ? <a className="underline" href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}</span>}{finding.evidence && <span className="mt-1 block text-xs text-[var(--muted)]">“{finding.evidence}”</span>}</p>; })}{request.analysis.capabilityFindings.map((finding,index) => <p key={`cap-${index}`} className="mt-2 text-sm"><strong>{finding.capability} · {finding.status}:</strong> {finding.explanation}{finding.evidence && <span className="mt-1 block text-xs text-[var(--muted)]">“{finding.evidence}”</span>}</p>)}{!company.config.capabilities.length && <p className="mt-2 text-xs text-[var(--muted)]">Team capabilities have not been configured.</p>}</div>
-                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Questions and risks</h3><ul className="mt-2 list-inside list-disc space-y-1 text-sm">{request.analysis.questions.map((item,index)=><li key={index}>{item}</li>)}{request.analysis.conflicts.map((item,index)=><li key={`conflict-${index}`}><strong>Conflict:</strong> {item}</li>)}{request.analysis.assumptions.map((item,index)=><li key={`assumption-${index}`}><strong>Assumption:</strong> {item}</li>)}</ul></div>
+                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Source-backed facts</h3>{request.analysis.facts.length ? <ul className="mt-3 space-y-3">{request.analysis.facts.map((fact, index) => <li key={index} className="border-t border-[var(--line)] pt-3"><p className="text-sm"><strong>{fact.key.replaceAll("_", " ")}:</strong> {fact.value} <span className="text-[10px] uppercase text-[var(--muted)]">{fact.status} · {fact.source}</span></p>{fact.evidence && <blockquote className="mt-1 border-l-2 border-neutral-400 pl-2 text-xs leading-5 text-[var(--muted)]">“{fact.evidence}”</blockquote>}<FindingReviewEditor value={findingReviews[`fact:${index}`]} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={value => changeFindingReview(`fact:${index}`, value)} /></li>)}</ul> : <p className="mt-2 text-sm text-[var(--muted)]">No directly attributable facts were extracted.</p>}</div>
+                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Product and capability fit</h3>{!company.knowledge.some(item => item.status === "approved") && <p className="mt-2 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">No approved product knowledge is configured. Fit remains unknown.</p>}{request.analysis.productFindings.map((finding,index) => { const source=company.knowledge.find(item=>item.id===finding.sourceId); return <article key={index} className="mt-3 border-t border-[var(--line)] pt-3"><p className="text-sm"><strong>{finding.status}:</strong> {finding.explanation}{source && <span className="mt-1 block text-xs text-[var(--muted)]">Source: {source.url ? <a className="underline" href={source.url} target="_blank" rel="noreferrer">{source.title}</a> : source.title}{source.retrievedAt && <span className="ml-1">(retrieved {new Date(source.retrievedAt).toLocaleString()})</span>}</span>}{finding.evidence && <span className="mt-1 block text-xs text-[var(--muted)]">“{finding.evidence}”</span>}</p><FindingReviewEditor value={findingReviews[`product:${index}`]} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={value => changeFindingReview(`product:${index}`, value)} /></article>; })}{request.analysis.capabilityFindings.map((finding,index) => <article key={`cap-${index}`} className="mt-3 border-t border-[var(--line)] pt-3"><p className="text-sm"><strong>{finding.capability} · {finding.status}:</strong> {finding.explanation}{finding.evidence && <span className="mt-1 block text-xs text-[var(--muted)]">“{finding.evidence}”</span>}</p><FindingReviewEditor value={findingReviews[`capability:${index}`]} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={value => changeFindingReview(`capability:${index}`, value)} /></article>)}{!company.config.capabilities.length && <p className="mt-2 text-xs text-[var(--muted)]">Team capabilities have not been configured.</p>}</div>
+                <div className="rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">AI assumptions and conflicts</h3><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Review each item and correct or reject it with a note when needed.</p>{request.analysis.conflicts.map((item,index)=><article key={`conflict-${index}`} className="mt-3 border-t border-[var(--line)] pt-3"><p className="text-sm"><strong>Conflict:</strong> {item}</p><FindingReviewEditor value={findingReviews[`conflict:${index}`]} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={value => changeFindingReview(`conflict:${index}`, value)} /></article>)}{request.analysis.assumptions.map((item,index)=><article key={`assumption-${index}`} className="mt-3 border-t border-[var(--line)] pt-3"><p className="text-sm"><strong>Assumption:</strong> {item}</p><FindingReviewEditor value={findingReviews[`assumption:${index}`]} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={value => changeFindingReview(`assumption:${index}`, value)} /></article>)}{!request.analysis.conflicts.length && !request.analysis.assumptions.length && <p className="mt-2 text-sm text-[var(--muted)]">No assumptions or conflicts were reported.</p>}</div>
                 <details className="rounded-xl border border-[var(--line)] p-4"><summary className="cursor-pointer text-sm font-semibold">Original request and sources</summary><pre className="mt-3 whitespace-pre-wrap break-words font-sans text-xs leading-5 text-[var(--muted)]">{request.text || "No pasted message."}</pre>{request.attachments.length > 0 && <ul className="mt-3 space-y-2">{request.attachments.map(file=><li key={file.id} className="flex flex-wrap items-center justify-between gap-2 border-t border-[var(--line)] pt-2 text-xs"><span className="min-w-0 break-all">{file.name} · {file.status.replaceAll("_", " ")} · {file.locators.join(", ") || "no page or sheet references"}{file.message ? ` · ${file.message}` : ""}</span><a className="shrink-0 underline" href={`/api/company-workspace?company=${encodeURIComponent(company.id)}&request=${encodeURIComponent(request.id)}&file=${encodeURIComponent(file.id)}`}>Download original</a></li>)}</ul>}</details>
               </div>}
             </Section>
 
             {request.analysis && <Section title="Human scope review" description="Correct deliverables, exclusions, acceptance, dependencies and task packages. Saving edits clears the previous scope confirmation.">
+              <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
+                <h3 className="text-sm font-semibold text-amber-950">Resolve analysis questions</h3>
+                <p className="mt-1 text-xs leading-5 text-amber-950">Every AI question and any reviewer-added question needs an answer or a reason it does not apply before scope confirmation.</p>
+                <div className="mt-3 space-y-3">{questionRows.map(({ key, question, value }) => <QuestionReviewEditor key={key} question={question} value={value} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={next => changeQuestionResolution(key, next)} />)}{reviewerQuestionRows.map(({ key, question, value }) => <QuestionReviewEditor key={key} question={question} value={value} disabled={!canEstimate || !editing || request.status === "frozen"} onChange={next => changeQuestionResolution(key, next)} onRemove={() => setReview(current => { if (!current) return current; const remaining = { ...current.questionResolutions }; delete remaining[key]; return { ...current, questionResolutions: remaining, confirmed: false }; })} />)}</div>
+                {!questionRows.length && !reviewerQuestionRows.length && <p className="mt-3 text-sm text-[var(--muted)]">No open analysis questions. Add any reviewer question that affects delivery readiness.</p>}
+                {editing && <div className="mt-4 grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-end"><Field name="Add a reviewer question"><textarea className={input} rows={2} maxLength={500} value={reviewerQuestion} onChange={event => setReviewerQuestion(event.target.value)} placeholder="What still needs clarification before this scope is ready?" /></Field><button type="button" className={secondary} disabled={!canEstimate || !reviewerQuestion.trim()} onClick={() => { const key = `review:${crypto.randomUUID()}`; changeQuestionResolution(key, { question: reviewerQuestion.trim(), resolution: "" }); setReviewerQuestion(""); }}><Plus size={14} />Add question</button></div>}
+              </div>
+              <div className="mb-4 rounded-xl border border-[var(--line)] p-4"><h3 className="text-sm font-semibold">Review each AI finding</h3><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Accept each finding or record a correction/rejection with an explanation. The original AI result and its evidence remain unchanged.</p></div>
               <div className="mb-4"><Field name="Reviewed work domain"><input className={input} disabled={!canEstimate || !editing || request.status === "frozen"} value={review.domain ?? ""} maxLength={100} onChange={event => setReview(current => current && ({ ...current, domain: event.target.value, confirmed: false }))}/></Field></div>
               <div className="mb-4 grid gap-4 md:grid-cols-2">{company.config.fields.filter(field => field.requestTypes.includes(review.requestType)).sort((a,b) => (a.priority ?? 5) - (b.priority ?? 5)).map(field => <Field key={field.key} name={`${field.label}${field.required ? " · required" : ""}`}><textarea className={input} rows={2} maxLength={2000} disabled={!canEstimate || !editing || request.status === "frozen"} value={review.fieldAnswers?.[field.key] ?? ""} onChange={event => setReview(current => current && ({ ...current, fieldAnswers: { ...current.fieldAnswers, [field.key]: event.target.value }, confirmed: false }))}/></Field>)}</div>
               {request.attachments.some(file => file.status !== "extracted" || file.truncated) && <label className="mb-4 flex gap-2 rounded-xl bg-amber-50 p-3 text-sm"><input type="checkbox" disabled={!canEstimate || !editing || request.status === "frozen"} checked={review.sourceLimitationsAcknowledged ?? false} onChange={event => setReview(current => current && ({ ...current, sourceLimitationsAcknowledged: event.target.checked, confirmed: false }))}/>I reviewed the incomplete original sources and reconciled their limitations in this scope.</label>}
               <div className="grid gap-4 md:grid-cols-2"><Field name="Request type"><select className={input} disabled={!canEstimate || !editing || request.status === "frozen"} value={review.requestType} onChange={event => setReview(current => current && ({ ...current, requestType: event.target.value as ScopeReview["requestType"], confirmed: false }))}>{types.map(item => <option key={item} value={item}>{typeLabel[item]}</option>)}</select></Field><Field name="Product fit"><select className={input} disabled={!editing || request.status === "frozen"} value={review.productId} onChange={event => setReview(current => current && ({ ...current, productId: event.target.value, confirmed: false }))}><option value="">Unknown / not configured</option>{company.config.products.map(product => <option key={product.id} value={product.id}>{product.name}</option>)}</select></Field>
-                <Field name="Deliverables"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.deliverables} onChange={event => setReview(current => current && ({ ...current, deliverables: event.target.value, confirmed: false }))} /></Field><Field name="Exclusions"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.exclusions} onChange={event => setReview(current => current && ({ ...current, exclusions: event.target.value, confirmed: false }))} /></Field><Field name="Acceptance criteria"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.acceptance} onChange={event => setReview(current => current && ({ ...current, acceptance: event.target.value, confirmed: false }))} /></Field><Field name="Dependencies and owners"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.dependencies} onChange={event => setReview(current => current && ({ ...current, dependencies: event.target.value, confirmed: false }))} /></Field></div>
+                <Field name="Deliverables"><textarea className={input} rows={4} required disabled={!editing || request.status === "frozen"} value={review.deliverables} onChange={event => setReview(current => current && ({ ...current, deliverables: event.target.value, confirmed: false }))} /></Field><Field name="Exclusions"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.exclusions} onChange={event => setReview(current => current && ({ ...current, exclusions: event.target.value, confirmed: false }))} /></Field><Field name="Acceptance criteria · required"><textarea className={input} rows={4} required disabled={!editing || request.status === "frozen"} value={review.acceptance} onChange={event => setReview(current => current && ({ ...current, acceptance: event.target.value, confirmed: false }))} placeholder="Define what complete delivery will mean…" /></Field><Field name="Dependencies and owners · enter “None identified.” when there are none"><textarea className={input} rows={4} required disabled={!editing || request.status === "frozen"} value={review.dependencies} onChange={event => setReview(current => current && ({ ...current, dependencies: event.target.value, confirmed: false }))} placeholder="List prerequisites and owners, or enter “None identified.”" /></Field></div>
               <div className="mt-5"><h3 className="text-sm font-semibold">Work packages</h3><div className="mt-3 space-y-3">{review.workPackages.map((item,index)=><WorkPackageEditor key={item.id} item={item} index={index} templates={company.config.tasks} disabled={!editing || request.status === "frozen"} onChange={next => setReview(current => current && ({ ...current, workPackages: current.workPackages.map((packageItem,i)=>i===index?next:packageItem), confirmed:false }))} onRemove={() => setReview(current => current && ({ ...current, workPackages: current.workPackages.filter((_,i)=>i!==index), confirmed:false }))} />)}</div>{editing && <button className={secondary + " mt-3"} type="button" onClick={() => { const template=company.config.tasks[0]; if (!template) return; const item: ScopeWorkPackage={id:crypto.randomUUID(),taskId:template.id,title:template.label,quantity:1,complexity:"medium",owner:"company",acceptance:"",dependencies:""}; setReview(current=>current&&({...current,workPackages:[...current.workPackages,item],confirmed:false})); }}><Plus size={14} />Add work package</button>}</div>
               {review.questions.length > 0 && <div className="mt-5 rounded-xl bg-amber-50 p-4"><h3 className="text-sm font-semibold text-amber-950">Open questions</h3><ul className="mt-2 list-inside list-disc text-sm text-amber-900">{review.questions.map((item,index)=><li key={index}>{item}</li>)}</ul></div>}
               <div className="mt-5 flex flex-wrap items-center gap-2">{editing ? <><button className={button} disabled={!canEstimate || !!busy || !unsavedScope} onClick={() => void action({ action:"saveReview",requestId:request.id,expectedVersion:request.version,review },"Scope changes saved. Confirm them before estimating.")}><Check size={15} />Save scope changes</button><button className={secondary} onClick={() => { setReview(reviewForEditor(request, company.config.products)); setEditing(false); }}>Cancel</button></> : <button className={secondary} disabled={!canEstimate || request.status === "frozen" || !!busy} onClick={() => setEditing(true)}>Edit reviewed scope</button>}
-                {!review.confirmed && request.status !== "frozen" && <button className={button} disabled={!canEstimate || !!busy || editing || !review.deliverables.trim()} onClick={() => void action({ action:"confirmScope",requestId:request.id,expectedVersion:request.version,confirmed:true },"Scope confirmed. You can now calculate effort.")}><ShieldCheck size={15} />Confirm scope</button>}
+                {!review.confirmed && request.status !== "frozen" && <button className={button} disabled={!canEstimate || !!busy || editing || reviewBlockers.length > 0} onClick={() => void action({ action:"confirmScope",requestId:request.id,expectedVersion:request.version,confirmed:true },"Scope confirmed. You can now calculate effort.")}><ShieldCheck size={15} />Confirm scope</button>}
                 {review.confirmed && request.status !== "frozen" && <p className="inline-flex items-center gap-2 text-sm text-green-800"><CheckCircle2 size={16} />Scope confirmed by {review.confirmedBy}</p>}
               </div>
+              {!review.confirmed && request.status !== "frozen" && reviewBlockers.length > 0 && <div className="mt-3 rounded-xl bg-amber-50 p-3 text-xs leading-5 text-amber-950"><strong>Resolve before confirming:</strong><ul className="mt-1 list-inside list-disc">{reviewBlockers.map(item=><li key={item}>{item}</li>)}</ul></div>}
             </Section>}
 
-            {review.confirmed && request.status !== "frozen" && <Section title="Explainable effort plan" description="Effort is calculated from configured task templates and reviewer-selected complexity. It is a planning range, not a calibrated prediction or calendar promise.">
+            {review.confirmed && request.status !== "frozen" && reviewBlockers.length > 0 && <Section title="Review required before estimating" description="This scope was confirmed before the current review checks. Reopen it to resolve every question and AI finding and make completion prerequisites explicit."><ul className="list-inside list-disc space-y-1 text-sm text-amber-950">{reviewBlockers.map(item=><li key={item}>{item}</li>)}</ul><button className={secondary + " mt-4"} disabled={!canEstimate || !!busy} onClick={() => setEditing(true)}>Reopen scope review</button></Section>}
+            {review.confirmed && request.status !== "frozen" && reviewBlockers.length === 0 && <Section title="Explainable effort plan" description="Effort is calculated from configured task templates and reviewer-selected complexity. It is a planning range, not a calibrated prediction or calendar promise.">
               {!request.estimate ? <button className={button} disabled={!canEstimate || !!busy || !review.workPackages.length} onClick={() => void action({ action:"estimate",requestId:request.id,expectedVersion:request.version },"Effort range calculated from the current task configuration.")}><Sparkles size={15} />Calculate effort</button> : <><EstimateTable estimate={request.estimate} /><button className={button + " mt-4"} disabled={!canEstimate || !!busy} onClick={() => void action({ action:"freeze",requestId:request.id,expectedVersion:request.version },"Reviewed estimate frozen as an immutable baseline.")}><ShieldCheck size={15} />Freeze estimate</button></>}
             </Section>}
-            {request.baselines.length > 0 && <Section title="Frozen estimate baseline" description="This snapshot preserves the reviewed scope, task configuration version and planning range.">{request.baselines.map(base=><div key={base.id} className="mb-3 rounded-xl bg-[var(--paper)] p-4"><div className="flex flex-wrap items-center justify-between gap-2"><strong>Baseline v{base.revision}</strong><span className="text-xs text-[var(--muted)]">{new Date(base.createdAt).toLocaleString()} · configuration v{base.configVersion}</span></div><p className="mt-2 break-all font-mono text-xs text-[var(--muted)]">SHA-256 {base.sha256}</p><p className="mt-3 text-sm">Effort: {base.estimate.lowHours}–{base.estimate.highHours} h · central {base.estimate.baseHours} h · {base.estimate.calibration}</p></div>)}</Section>}
+            {request.baselines.length > 0 && <Section title="Frozen estimate baseline" description="Each immutable snapshot keeps its configured prior, adjusted forecast and training-history provenance.">{request.baselines.map(base=><details key={base.id} className="mb-3 rounded-xl bg-[var(--paper)] p-4"><summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2"><strong>Baseline v{base.revision}</strong><span className="text-xs text-[var(--muted)]">{new Date(base.createdAt).toLocaleString()} · configuration v{base.configVersion} · {base.estimate.calibration}</span></summary><p className="mt-3 break-all font-mono text-xs text-[var(--muted)]">SHA-256 {base.sha256}</p><div className="mt-4"><EstimateTable estimate={base.estimate}/></div></details>)}</Section>}
             {request.status === "frozen" && <DeliveryPanel key={request.id} company={company} request={request} actorId={data!.actorId} busy={!!busy} action={body => action(body,"Delivery review updated.")}/>}
             <button className="text-xs font-medium text-red-800 underline" type="button" disabled={!canEstimate || request.status === "frozen" || !!busy} onClick={() => { if (window.confirm(`Delete “${request.title}” and its attached files? This cannot be undone.`)) void action({action:"deleteRequest",requestId:request.id,expectedVersion:request.version},"Request and attached files deleted."); }}>Delete request and files</button>
           </>}
@@ -235,16 +336,50 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
       {panel === "evaluation" && <EvaluationPanel company={company}/>}
     </>}
     </div>
-    <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-estimator-line py-5 text-xs leading-6 text-estimator-muted"><div><p className="max-w-2xl">Source-backed scope. Human review. Explainable effort.</p>{data && !company && <details className="mt-2"><summary>Your Site account ID</summary><code className="mt-2 block max-w-sm break-all">{data.actorId}</code></details>}</div><Link href="/" className="inline-flex items-center gap-2 hover:text-estimator-ink">The Estimator<Layers3 size={14}/></Link></footer>
+    <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-estimator-line py-5 text-xs leading-6 text-estimator-muted"><p className="max-w-2xl">Source-backed scope. Human review. Explainable effort.</p><span>The Estimator · Private company workspace</span></footer>
   </main>;
 }
 
 function WorkPackageEditor({ item, index, templates, disabled, onChange, onRemove }: { item: ScopeWorkPackage; index: number; templates: CompanyConfig["tasks"]; disabled: boolean; onChange: (value: ScopeWorkPackage) => void; onRemove: () => void }) {
-  return <div className="rounded-xl border border-[var(--line)] p-4"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_90px_110px]"><Field name={`Package ${index + 1}`}><input className={input} disabled={disabled} value={item.title} onChange={event=>onChange({...item,title:event.target.value})} /></Field><Field name="Task template"><select className={input} disabled={disabled} value={item.taskId} onChange={event=>{const template=templates.find(task=>task.id===event.target.value);onChange({...item,taskId:event.target.value,title:template?.label??item.title});}}>{templates.map(template=><option key={template.id} value={template.id}>{template.label}</option>)}</select></Field><Field name="Quantity"><input className={input} type="number" min="0.1" max="100" step="0.1" disabled={disabled} value={item.quantity} onChange={event=>onChange({...item,quantity:Number(event.target.value)})}/></Field><Field name="Complexity"><select className={input} disabled={disabled} value={item.complexity} onChange={event=>onChange({...item,complexity:event.target.value as ScopeWorkPackage["complexity"]})}><option>low</option><option>medium</option><option>high</option></select></Field></div><div className="mt-3 grid gap-3 md:grid-cols-2"><Field name="Prerequisites and owner"><div className="flex flex-col gap-2 sm:flex-row"><select className={input} disabled={disabled} value={item.owner} onChange={event=>onChange({...item,owner:event.target.value as ScopeWorkPackage["owner"]})}><option value="company">Company</option><option value="customer">Customer</option><option value="vendor">Vendor</option></select><input className={input} disabled={disabled} value={item.dependencies} onChange={event=>onChange({...item,dependencies:event.target.value})} placeholder="Dependency details" /></div></Field><Field name="Acceptance criteria"><input className={input} disabled={disabled} value={item.acceptance} onChange={event=>onChange({...item,acceptance:event.target.value})} placeholder="How will delivery be accepted?" /></Field></div>{!disabled&&<button className="mt-3 text-xs font-medium text-red-800 underline" type="button" onClick={onRemove}>Remove package</button>}</div>;
+  return <div className="rounded-xl border border-[var(--line)] p-4"><div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_160px_90px_110px]"><Field name={`Package ${index + 1}`}><input className={input} disabled={disabled} value={item.title} onChange={event=>onChange({...item,title:event.target.value})} /></Field><Field name="Task template"><select className={input} disabled={disabled} value={item.taskId} onChange={event=>{const template=templates.find(task=>task.id===event.target.value);onChange({...item,taskId:event.target.value,title:template?.label??item.title});}}>{templates.map(template=><option key={template.id} value={template.id}>{template.label}</option>)}</select></Field><Field name="Quantity"><input className={input} type="number" min="0.1" max="100" step="0.1" disabled={disabled} value={item.quantity} onChange={event=>onChange({...item,quantity:Number(event.target.value)})}/></Field><Field name="Complexity"><select className={input} disabled={disabled} value={item.complexity} onChange={event=>onChange({...item,complexity:event.target.value as ScopeWorkPackage["complexity"]})}><option>low</option><option>medium</option><option>high</option></select></Field></div><div className="mt-3 grid gap-3 md:grid-cols-2"><Field name="Prerequisites and owner · state none if there are no prerequisites"><div className="flex flex-col gap-2 sm:flex-row"><select className={input} disabled={disabled} value={item.owner} onChange={event=>onChange({...item,owner:event.target.value as ScopeWorkPackage["owner"]})}><option value="company">Company</option><option value="customer">Customer</option><option value="vendor">Vendor</option></select><input className={input} required disabled={disabled} value={item.dependencies} onChange={event=>onChange({...item,dependencies:event.target.value})} placeholder="Prerequisite, owner, or ‘None identified.’" /></div></Field><Field name="Acceptance criteria · required"><input className={input} required disabled={disabled} value={item.acceptance} onChange={event=>onChange({...item,acceptance:event.target.value})} placeholder="How will this package be accepted?" /></Field></div>{!disabled&&<button className="mt-3 text-xs font-medium text-red-800 underline" type="button" onClick={onRemove}>Remove package</button>}</div>;
 }
 
 function EstimateTable({ estimate }: { estimate: NonNullable<ClientRequest["estimate"]> }) {
-  return <><div className="mb-4 grid gap-3 sm:grid-cols-3"><Metric label="Planning range" value={`${estimate.lowHours}–${estimate.highHours} h`} /><Metric label="Central effort" value={`${estimate.baseHours} h`} /><Metric label="Calibration" value="Uncalibrated" /></div><div className="overflow-x-auto rounded-xl border border-[var(--line)]"><table className="w-full min-w-[620px] whitespace-normal text-left text-sm"><thead className="bg-[var(--paper)] text-xs text-[var(--muted)]"><tr><th className="p-3">Work package</th><th className="p-3">Quantity</th><th className="p-3">Base hours</th><th className="p-3">Range</th></tr></thead><tbody>{estimate.tasks.map((task,index)=><tr className="border-t border-[var(--line)]" key={`${task.templateId}-${index}`}><td className="min-w-60 p-3"><strong>{task.label}</strong><ul className="mt-1 text-xs leading-5 text-[var(--muted)]">{task.assumptions.map(item=><li key={item}>{item}</li>)}</ul></td><td className="p-3">{task.quantity} · {task.complexity}</td><td className="p-3">{task.baseHours} h</td><td className="p-3">{task.lowHours}–{task.highHours} h</td></tr>)}</tbody></table></div><p className="mt-3 text-xs leading-5 text-[var(--muted)]">Calendar delivery dates also depend on staffing availability, client response time and vendor prerequisites. Those values are not estimated here.</p></>;
+  const summary = estimate.calibrationSummary;
+  const priorLow = estimate.lowHours;
+  const priorHigh = estimate.highHours;
+  const priorCentral = estimate.baseHours;
+  const forecastLow = estimate.adjustedLowHours ?? priorLow;
+  const forecastHigh = estimate.adjustedHighHours ?? priorHigh;
+  const forecastCentral = estimate.adjustedHours ?? priorCentral;
+  const minimumSamples = summary?.minimumSamplesPerTask;
+  const exclusions = summary?.excluded;
+  const excludedCounts = exclusions ? [
+    ["Holdout", exclusions.holdout],
+    ["Synthetic", exclusions.synthetic],
+    ["Unreviewed or invalid", exclusions.unreviewedOrInvalid],
+    ["Not comparable", exclusions.notComparable],
+  ] as const : [];
+  const adjustedTaskCount = estimate.tasks.filter(task => task.calibrationFactor !== undefined && task.calibrationFactor !== 1).length;
+  return <>
+    <div className="mb-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <Metric label="Configured prior · range" value={`${priorLow}–${priorHigh} h`} />
+      <Metric label="Configured prior · central" value={`${priorCentral} h`} />
+      <Metric label="Adjusted forecast · range" value={`${forecastLow}–${forecastHigh} h`} />
+      <Metric label="Adjusted forecast · central" value={`${forecastCentral} h`} />
+    </div>
+    <div className="overflow-x-auto rounded-xl border border-[var(--line)]"><table className="w-full min-w-[860px] whitespace-normal text-left text-sm"><thead className="bg-[var(--paper)] text-xs text-[var(--muted)]"><tr><th className="p-3">Work package</th><th className="p-3">Quantity</th><th className="p-3">Configured prior</th><th className="p-3">Adjusted forecast</th><th className="p-3">Approved training</th></tr></thead><tbody>{estimate.tasks.map((task,index)=>{const samples=summary?.taskSamples[task.templateId];return <tr className="border-t border-[var(--line)]" key={`${task.templateId}-${index}`}><td className="min-w-60 p-3"><strong>{task.label}</strong><ul className="mt-1 text-xs leading-5 text-[var(--muted)]">{task.assumptions.map(item=><li key={item}>{item}</li>)}</ul></td><td className="p-3">{task.quantity} · {task.complexity}</td><td className="p-3">{task.lowHours}–{task.highHours} h<br/><span className="text-xs text-[var(--muted)]">central {task.baseHours} h</span></td><td className="p-3">{task.adjustedLowHours ?? task.lowHours}–{task.adjustedHighHours ?? task.highHours} h<br/><span className="text-xs text-[var(--muted)]">central {task.adjustedHours ?? task.baseHours} h · ×{(task.calibrationFactor ?? 1).toFixed(2)}</span></td><td className="p-3 text-xs">{samples === undefined ? "Sample count unavailable" : `${samples}${minimumSamples ? ` / ${minimumSamples}` : ""} examples`}</td></tr>;})}</tbody></table></div>
+    <div className="mt-4 rounded-xl border border-[var(--line)] p-4 text-xs leading-5 text-[var(--muted)]">
+      <p className="font-semibold text-[var(--ink)]">{estimate.calibration === "training-history" ? `Training-history adjustment · ${summary?.appliedTasks ?? adjustedTaskCount} task${(summary?.appliedTasks ?? adjustedTaskCount) === 1 ? "" : "s"} adjusted` : "Configured priors unchanged"}</p>
+      {summary ? <>
+        <p className="mt-1">Method: {summary.method} · domain: {summary.domain || "unspecified"} · request type: {summary.requestType}. Minimum {summary.minimumSamplesPerTask} independently approved training examples per task; adjustment capped at ×{summary.maximumAdjustmentFactor}.</p>
+        {estimate.calibration === "uncalibrated" && <p className="mt-1">No task met the minimum sample threshold. The adjusted forecast is identical to the configured prior.</p>}
+        <p className="mt-1">Excluded outcomes — {excludedCounts.map(([name,count])=>`${name}: ${count}`).join(" · ")}.</p>
+        {summary.sourceBaselineIds.length > 0 && <details className="mt-2"><summary className="cursor-pointer font-medium text-[var(--ink)]">Contributing approved baseline records ({summary.sourceBaselineIds.length})</summary><ul className="mt-1 space-y-1 font-mono">{summary.sourceBaselineIds.map(id=><li key={id} className="break-all">{id}</li>)}</ul></details>}
+      </> : <p className="mt-1">This saved estimate has no training-history provenance metadata. Its configured prior values remain visible above.</p>}
+      <p className="mt-2">Calendar delivery dates also depend on staffing availability, client response time and vendor prerequisites. Those values are not estimated here.</p>
+    </div>
+  </>;
 }
 function Metric({ label: caption, value }: { label: string; value: string }) { return <div className="rounded-xl bg-[var(--paper)] p-3"><p className="text-[10px] uppercase tracking-wide text-[var(--muted)]">{caption}</p><p className="mt-1 text-sm font-semibold">{value}</p></div>; }
 
