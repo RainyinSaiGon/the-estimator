@@ -42,13 +42,12 @@ export default function SignInForm({ returnTo }: { returnTo: string }) {
   }
 
   return <div>
-    <div className="flex items-start justify-between gap-5">
+      <div className="flex items-start justify-between gap-5">
       <div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Identity service</p><h2 className="mt-2 text-2xl font-medium tracking-tight">{mode === "login" ? "Welcome back" : "Create your account"}</h2></div>
-      <div className="rounded-full bg-[var(--paper)] px-3 py-1 text-[10px] uppercase tracking-wider text-[var(--muted)]">Local preview</div>
     </div>
-    <div className="mt-6 flex rounded-full bg-[var(--paper)] p-1" role="tablist" aria-label="Account action">
-      <button type="button" role="tab" aria-selected={mode === "login"} onClick={() => { setMode("login"); setError(""); setNotice(""); }} className={"flex-1 rounded-full px-4 py-2 text-sm " + (mode === "login" ? "bg-white shadow-sm" : "text-[var(--muted)]")}>Sign in</button>
-      <button type="button" role="tab" aria-selected={mode === "register"} onClick={() => { setMode("register"); setError(""); setNotice(""); }} className={"flex-1 rounded-full px-4 py-2 text-sm " + (mode === "register" ? "bg-white shadow-sm" : "text-[var(--muted)]")}>Create account</button>
+    <div className="mt-6 flex rounded-full bg-[var(--paper)] p-1" role="group" aria-label="Account action">
+      <button type="button" aria-pressed={mode === "login"} onClick={() => { setMode("login"); setError(""); setNotice(""); }} className={"flex-1 rounded-full px-4 py-2 text-sm " + (mode === "login" ? "bg-white shadow-sm" : "text-[var(--muted)]")}>Sign in</button>
+      <button type="button" aria-pressed={mode === "register"} onClick={() => { setMode("register"); setError(""); setNotice(""); }} className={"flex-1 rounded-full px-4 py-2 text-sm " + (mode === "register" ? "bg-white shadow-sm" : "text-[var(--muted)]")}>Create account</button>
     </div>
     <form className="mt-6 space-y-4" onSubmit={submit}>
       {mode === "register" && <div><label className="mb-2 block" htmlFor="displayName">Display name</label><input className="w-full" id="displayName" name="displayName" required maxLength={100} autoComplete="name" /></div>}

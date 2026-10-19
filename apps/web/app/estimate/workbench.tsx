@@ -16,7 +16,6 @@ The portal has a REST API, but we haven't shared its documentation yet. We'd lik
 Thanks,
 Maya · Operations Lead`;
 
-type Parser = "ai" | "sample";
 type Complexity = "small" | "moderate" | "complex";
 type Requirement = { id: string; title: string; evidence: string; evidenceStatus: "verified" | "needs_review"; complexity?: Complexity };
 type Scope = {
@@ -116,11 +115,11 @@ async function fileContentBase64(file: File) {
   return btoa(chunks.join(""));
 }
 
-export default function EstimateWorkbench({ identityEnabled = false, account = null, initialReviewRecordId = "" }: { identityEnabled?: boolean; account?: IdentityAccount | null; initialReviewRecordId?: string }) {
+export default function EstimateWorkbench({ identityEnabled = false, account = null, initialReviewRecordId = "", initialSample = false }: { identityEnabled?: boolean; account?: IdentityAccount | null; initialReviewRecordId?: string; initialSample?: boolean }) {
   const router = useRouter();
-  const [brief, setBrief] = useState(sampleBrief);
+  const [brief, setBrief] = useState(initialSample ? sampleBrief : "");
   const [file, setFile] = useState<File | null>(null);
-  const [parser, setParser] = useState<Parser>("ai");
+  const parser = "ai";
   const [capabilityText, setCapabilityText] = useState("");
   const [scope, setScope] = useState<Scope | null>(null);
   const [suggestedScope, setSuggestedScope] = useState<Scope | null>(null);
@@ -539,14 +538,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
         <p className="mt-4 max-w-xl leading-7 text-[var(--muted)]">Bring in a request as text or a common document. Review and correct the extracted work before asking for a planning range.</p>
 
         <form onSubmit={analyze} className="mt-7 space-y-5">
-          <fieldset>
-            <legend className="mb-2 text-sm font-medium">Analysis mode</legend>
-            <div className="grid grid-cols-2 rounded-full border border-[var(--line)] bg-white p-1">
-              {(["ai", "sample"] as const).map((value) => <button key={value} type="button" aria-pressed={parser === value} onClick={() => { setParser(value); clearReview(); }} className={`rounded-full px-4 py-2.5 text-sm transition ${parser === value ? "bg-[var(--ink)] text-white" : "text-[var(--muted)] hover:text-[var(--ink)]"}`}>
-                {value === "ai" ? "AI specialist agents" : "Sample rules"}
-              </button>)}
-            </div>
-          </fieldset>
+          <div className="flex items-start gap-3 rounded-2xl border border-[var(--line)] bg-white p-4">
+            <span className="grid size-9 shrink-0 place-items-center rounded-full bg-[var(--accent)] text-xs font-semibold text-[var(--ink)]" aria-hidden="true">AI</span>
+            <div><p className="text-sm font-medium">AI specialist analysis</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Find request facts and source evidence for a person to review.</p></div>
+          </div>
 
           <div>
             <label htmlFor="client-file" className="mb-2 block text-sm font-medium">Client material</label>
@@ -560,18 +555,17 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
               <label htmlFor="brief" className="text-sm font-medium">Or paste the request</label>
               <button type="button" onClick={() => { setFile(null); setBrief(sampleBrief); clearReview(); }} className="text-xs text-[var(--muted)] underline underline-offset-4">Load fictional CRM sample</button>
             </div>
-            <textarea id="brief" value={brief} onChange={(event) => { setBrief(event.target.value); clearReview(); }} rows={11} maxLength={20_000} disabled={Boolean(file)} className="w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-sm leading-6 outline-none focus:border-neutral-500 disabled:opacity-50" />
+            <textarea id="brief" value={brief} onChange={(event) => { setBrief(event.target.value); clearReview(); }} rows={11} maxLength={20_000} disabled={Boolean(file)} placeholder="Paste the client request here. You can also upload a supported document above." className="w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-sm leading-6 focus:border-neutral-500 disabled:opacity-50" />
             <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]"><span>{file ? "File will be analyzed instead" : "Source is shown alongside extracted findings"}</span><span>{brief.length.toLocaleString()} / 20,000</span></div>
           </div>
 
           <div>
             <label htmlFor="capabilities" className="mb-2 block text-sm font-medium">Team capability profile <span className="font-normal text-[var(--muted)]">(optional)</span></label>
-            <textarea id="capabilities" value={capabilityText} onChange={(event) => { setCapabilityText(event.target.value); clearReview(); }} rows={3} maxLength={5000} placeholder={"One verified team skill per line\nExample: HubSpot API delivery"} className="w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-sm leading-6 outline-none focus:border-neutral-500" />
+            <textarea id="capabilities" value={capabilityText} onChange={(event) => { setCapabilityText(event.target.value); clearReview(); }} rows={3} maxLength={5000} placeholder={"One verified team skill per line\nExample: HubSpot API delivery"} className="w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-sm leading-6 focus:border-neutral-500" />
             <p className="mt-2 text-xs leading-5 text-[var(--muted)]">Only add capabilities your team has confirmed. With no profile, team fit stays unknown.</p>
           </div>
 
-          {parser === "ai" && <div role="note" aria-label="AI data and privacy" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-semibold">What AI analysis sends</p><p className="mt-1.5">The Estimator analysis service extracts text from uploaded files. OpenAI receives the request text (extracted text for files), the team capabilities you entered, and the source name and file type. The uploaded file itself is not sent to OpenAI.</p><p className="mt-1.5">Only send client material you are authorized to share with OpenAI. The Estimator does not add analysis to your private workspace automatically. Private saving requires the optional identity and storage services and a sign-in. When enabled, a reviewed estimate you explicitly save is encrypted before storage in your account-scoped workspace and kept for {recordStatus ? `${recordStatus.retentionDays} days` : "the configured retention period"}.</p></div>}
-          {parser === "sample" && <p className="rounded-xl border border-[var(--line)] bg-white p-3 text-xs leading-5 text-[var(--muted)]">Sample mode uses deterministic local rules, makes no AI provider call, and does not save a record automatically. General-work ranges are uncalibrated planning priors.</p>}
+          <div role="note" aria-label="AI data and privacy" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-semibold">What AI analysis sends</p><p className="mt-1.5">The Estimator analysis service extracts text from uploaded files. OpenAI receives the request text (extracted text for files), the team capabilities you entered, and the source name and file type. The uploaded file itself is not sent to OpenAI.</p><p className="mt-1.5">Only send client material you are authorized to share with OpenAI. The Estimator does not add analysis to your private workspace automatically. Private saving requires the optional identity and storage services and a sign-in. When enabled, a reviewed estimate you explicitly save is encrypted before storage in your account-scoped workspace and kept for {recordStatus ? `${recordStatus.retentionDays} days` : "the configured retention period"}.</p></div>
 
           <button disabled={busy !== null || (!file && brief.trim().length < 30)} className="rounded-full bg-[var(--ink)] px-6 py-3 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">{busy === "analyze" ? "Analyzing request…" : scope ? "Analyze again" : "Analyze and review"}</button>
         </form>
@@ -689,7 +683,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
       </section>
     </div>
 
-    <section className="border-t border-[var(--line)] py-8">
+    <section id="saved-estimates" className="border-t border-[var(--line)] py-8">
       <div className="flex flex-wrap items-end justify-between gap-4"><div><p className="text-xs uppercase tracking-[.16em] text-[var(--muted)]">Private workspace</p><h2 className="mt-2 text-2xl font-medium tracking-tight">Saved estimates</h2></div><div className="flex items-center gap-2">{recordsSignedIn === true && <button type="button" onClick={() => void signOut()} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-[var(--ink)]">Sign out</button>}{savedRecords.length > 0 && <button type="button" onClick={deleteAllPrivateRecords} disabled={recordAction !== null} className="rounded-full border border-[var(--line)] px-4 py-2 text-xs text-[var(--muted)] hover:text-red-700 disabled:opacity-50">{recordAction === "all" ? "Deleting workspace…" : "Delete all"}</button>}</div></div>
       {account?.accountId && <p className="mt-3 text-xs text-[var(--muted)]">Your account ID, for independent review assignments: {account.accountId}</p>}
       {identityEnabled && <div id="independent-delivery-review" className="mt-5 rounded-2xl border border-[var(--line)] p-5"><h3 className="text-sm font-semibold">Independent delivery review</h3><p className="mt-1 text-xs leading-5 text-[var(--muted)]">Open a review link while signed in to the assigned reviewer account. The service reveals only the estimate assigned to that account.</p><div className="mt-3 flex flex-wrap gap-2"><input aria-label="Delivery review record ID" value={reviewRecordId} onChange={(event) => setReviewRecordId(event.target.value)} className="min-w-64 flex-1 rounded-lg border border-[var(--line)] bg-white px-3 py-2 text-sm text-[var(--ink)]" placeholder="Paste the record ID from the review link" /><button type="button" onClick={() => void loadDeliveryReview()} disabled={recordAction !== null || !reviewRecordId.trim()} className="rounded-full bg-[var(--ink)] px-4 py-2 text-xs font-medium text-white disabled:opacity-50">{recordAction === reviewRecordId ? "Loading…" : "Load review"}</button></div>
