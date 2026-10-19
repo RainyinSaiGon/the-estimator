@@ -19,14 +19,14 @@ flowchart LR
 | Area | Backend | Workspace UI |
 | --- | --- | --- |
 | Intake | Authorized read-only Gmail polling, thread/message deduplication; signed form/CRM webhook; manual multipart upload | Inbox, connector authorization, sync status, retries, upload |
-| Documents | PDF, DOCX, XLSX, CSV, PPTX, EML, JSON, Markdown and text; encrypted originals; page/sheet/paragraph references; failures and truncation | Multiple files, extraction details, original download, incomplete-source acknowledgment |
+| Documents | PDF including OCR for up to 10 scanned pages, DOCX, XLSX, CSV, PPTX, EML, JSON, Markdown and text; encrypted originals; page/sheet/paragraph references; failures and truncation | Multiple files, extraction details, original download, incomplete-source acknowledgment |
 | Classification | Demo, setup, migration, integration, customization, support | Editable classification and product fit |
 | Scope | Typed configured fields, conditional requirements, owners, deliverables, exclusions, acceptance criteria and work packages | Human corrections, draft and confirmed scope |
-| Knowledge | Approved immutable source versions, bounded lexical retrieval, cited passages, retrieval dates, digest; safe approved-domain fetching | Draft, inspect, approve, retire, replace and search |
+| Knowledge | Approved immutable source versions, bounded lexical retrieval, cited passages, retrieval dates, digest; safe approved-domain fetching and 30-day refresh jobs | Draft, inspect, approve, retire, replace and search; refreshes become drafts and require approval |
 | Configuration | Versioned fields, priorities, clarification prompts, products, capability profile, tasks, planning assumptions and domain allowlist | Admin settings, version history, explicit save |
 | Effort | Configured task priors adjusted only by comparable independently approved recorded training outcomes; added scope excluded | Task calculations, adjustment factors, references, range and optional staffing scenario |
 | Learning | Frozen source/config/estimate/knowledge; independent delivery approval; deterministic train/holdout split; recorded and synthetic cohorts separated | Baseline export, actuals submission, reviewer approval, evaluation and JSONL export |
-| Access and operations | Verified first-party accounts; company membership and roles; encryption; retention cleanup; bounded processing/retries; audit metadata | Members, processing state, error details, audit, request/company deletion |
+| Access and operations | Verified first-party accounts; company membership and roles; encryption; configurable 1–3650-day request retention; startup and six-hour purge; bounded processing/retries; audit metadata | Members, processing state, error details, audit, request/company deletion and retention settings |
 
 ## Run locally
 
@@ -38,7 +38,7 @@ docker compose --env-file .env.local -f compose.yaml -f compose.identity.yaml -f
 
 Configure a real email delivery provider for account verification, or add the local Mailpit override described in the development guide. Open `http://localhost:3000/workspace`, sign in, and create a company. Save real company task priors or load the clearly labeled illustrative Anduin example and replace its fictional hours. Add and approve product documentation before analyzing a request.
 
-The Python service performs OpenAI analysis only; no rule-parser fallback silently replaces a failed AI call. The worker starts when the private-workspace stack starts and checks configured mailboxes every five minutes between batches by default. Each batch imports messages first, reloads the persisted queue, and starts analysis of newly received requests in the same batch. No browser, manual sync, or manual Analyze action is needed. Failed analysis retries up to three attempts with a delay; manual re-analysis is available. Scanned PDFs are flagged for external OCR rather than silently treated as readable.
+The Python service performs OpenAI analysis only; no rule-parser fallback silently replaces a failed AI call. The worker starts when the private-workspace stack starts and checks configured mailboxes every five minutes between batches by default. It refreshes approved website sources every 30 days and saves each fetched version as a draft for administrator review. Each batch imports messages first, reloads the persisted queue, and starts analysis of newly received requests in the same batch. No browser, manual sync, or manual Analyze action is needed. Failed analysis retries up to three attempts with a delay; manual re-analysis is available. Searchable PDFs are read directly; scanned PDF pages use local English OCR with a 10-page OCR limit.
 
 ## Company-neutral knowledge contract
 
@@ -93,13 +93,15 @@ Headers: `Content-Type: application/json`, `X-Workflow-Timestamp: <RFC3339 UTC>`
 
 Freeze before delivery. Record original task hours and additional scope separately, with evidence and a different designated reviewer. The server rejects self-approval and ignores client assertions of eligibility. Only independently approved recorded training outcomes can affect task adjustment. Holdout assignment uses a stable hash namespace and is captured in the baseline before outcome performance is examined.
 
+The request workspace presents a provisional AI work breakdown with source quotations or an explicit inference label. A reviewer edits and confirms deliverables, exclusions, acceptance criteria, dependencies, owners, and task packages before effort is calculated. Numeric task ranges come from configured priors and eligible training deliveries, not the language model. Freezing the reviewed estimate creates the immutable commitment baseline. Per-task assignee, status, planned dates, and progress notes are stored separately and audited; they do not rewrite the baseline.
+
 Evaluation reports base/adjusted absolute error, signed bias, observed range coverage, domain counts, exclusions, and sample limitations. Exported JSONL is compatible with the existing [holdout evaluator](../evaluation/README.md). Synthetic demonstrations remain separate. A measured count is descriptive; it does not prove representativeness or improvement. Issue #39 still needs real eligible recorded holdout outcomes.
 
 ## Current operational limits
 
 - Ten files, 10 MB per file, 20 MB total per request; 20,000 extracted characters per file, 90,000 across attachments, and 100,000 message characters. Failures/truncation are visible and require reconciliation.
-- OCR, legacy binary DOC/XLS, password-protected files, and nested EML attachments need conversion or separate upload.
+- OCR is limited to English and 10 scanned pages per PDF. Legacy binary DOC/XLS, password-protected files, and nested EML attachments need conversion or separate upload.
 - A company aggregate is bounded to 200 requests, 200 knowledge versions and 16 MB of encrypted JSON. This is a local prototype storage boundary, not a high-volume mailbox archive.
-- The staffing scenario assumes concurrently available people and explicit dependency delays. It does not consult a real staffing calendar.
+- Staffing projections use allocated people, configured daily hours, dependency delay, and weekdays. The optional finish date excludes weekends but does not consult a real staffing calendar or holidays.
 - Google authorization, a real submission provider, live email delivery, and representative recorded delivery data require the respective owner's setup/data. Local tests cannot verify those external accounts.
 - The hosted Sites application has its own company workflow and GitHub release artifact. See [Sites deployment and coverage](sites-release.md) for its supported adapters, roles, webhooks, MCP and delivery review. The native processes described here remain a separate deployment target; Sites Gmail polling is deferred.

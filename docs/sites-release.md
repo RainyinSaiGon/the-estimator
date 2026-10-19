@@ -2,6 +2,12 @@
 
 The public application stays at <https://the-estimator-anduin-vu.zanyloach6.chatgpt.site>. Its company workflow is `/company-workspace`. GitHub is the source of truth for the complete Sites source tree.
 
+## Temporary public demo access
+
+Sites builds enable `PUBLIC_DEMO_ACCESS=true` by default so reviewers can open `/company-workspace` without a ChatGPT sign-in. The flag can be overridden to `false` in the build environment to restore the sign-in gate. Public visitors use a dedicated shared demo actor that is separate from Site account IDs; existing account-owned workspaces and the earlier private-estimate APIs remain account-scoped.
+
+The demo actor can create, edit, analyze, review, estimate, freeze, track and evaluate company requests. Its workspace is shared by every anonymous visitor: request text, settings, approved knowledge and uploaded files are visible to anyone opening the public demo. The banner tells visitors to use synthetic material only. Credential-backed webhook and MCP credential changes are disabled in this mode. Turn `PUBLIC_DEMO_ACCESS` off after judging or before entering any real customer material.
+
 ## Release path
 
 The **Sites release artifact** GitHub Actions workflow runs for pull requests and pushes to `main`. It checks types, evaluation invariants, and the compiled Worker against isolated local D1/R2. It builds the Cloudflare application with `npm run build:legacy` and uploads `sites-release-<commit>` with its GitHub commit and Git tree recorded in the archive. No production credential is available to CI.
@@ -36,6 +42,6 @@ Webhook payloads are bounded to 5 MB, ten files, 2 MB each and 4 MB combined. DO
 
 Production `OPENAI_API_KEY` and `WORKFLOW_ENCRYPTION_KEY` belong only in Sites secret settings. The encryption key is 32 random bytes encoded as Base64 and protects webhook credentials with AES-GCM and company-bound authenticated data. Do not rotate it on an existing database without migrating encrypted credentials. MCP tokens are shown once and stored as hashes. Only approved company knowledge is returned by the MCP tools; tokens cannot write data. Platform-managed connections use `/mcp`: call `company_list`, then supply `companyId` to knowledge tools. Custom clients may instead use the company-scoped URL in Connectors.
 
-Requests, originals and exports require an authorized organization identity. AI receives submitted text and extracted material only after explicit intake or a configured signed webhook. Private file keys are not public download URLs. Unfrozen requests and originals can be deleted from Requests. Frozen baselines, reviewed outcomes and audit history are retained; this prototype has no automatic retention purge. Private exports must stay outside Git. Limits are 50 owned organizations, 100 members, 200 requests and 200 knowledge versions per organization; latest 100 audit events are shown. Administrators must agree retention and deletion handling before storing customer data.
+Outside public-demo mode, requests, originals and exports require an authorized organization identity. AI receives submitted text and extracted material only after explicit intake or a configured signed webhook. Private file keys are not public download URLs. Unfrozen requests and originals can be deleted from Requests. Frozen baselines, reviewed outcomes and audit history are retained; this prototype has no automatic retention purge. Private exports must stay outside Git. Limits are 50 owned organizations, 100 members, 200 requests and 200 knowledge versions per organization; latest 100 audit events are shown. Administrators must agree retention and deletion handling before storing customer data.
 
 The existing account's OpenAI credential has a configured expiry; renew it in Sites secret settings before that expiry. A successful deployment does not prove a third-party form or MCP client is configured. An actual authorized client call verifies the connection; independent review requires a different real signed-in reviewer in production.

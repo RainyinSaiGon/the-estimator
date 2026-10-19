@@ -3,6 +3,8 @@ import unittest
 import zipfile
 from unittest.mock import patch
 
+import pymupdf as fitz
+from PIL import Image, ImageDraw, ImageFont
 from fastapi import HTTPException
 from pypdf import PdfWriter
 from document_ingest import extract_document
@@ -58,6 +60,18 @@ class WorkflowIntelligenceTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as raised:
             extract_document("scanned.pdf", out.getvalue())
         self.assertIn("OCR", str(raised.exception.detail))
+
+    def test_scanned_pdf_uses_local_ocr(self):
+        image = Image.new("RGB", (1400, 360), "white")
+        draw = ImageDraw.Draw(image)
+        draw.text((60, 120), "SCANNED ESTIMATOR OCR CHECK", fill="black", font=ImageFont.load_default(size=72))
+        png = io.BytesIO()
+        image.save(png, format="PNG")
+        pdf = fitz.open()
+        page = pdf.new_page(width=700, height=180)
+        page.insert_image(page.rect, stream=png.getvalue())
+        result = extract_document("scanned.pdf", pdf.tobytes())
+        self.assertIn("SCANNED ESTIMATOR OCR CHECK", result["text"])
 
     def test_excel_retains_sheet_name_row_and_inline_text(self):
         out = io.BytesIO()

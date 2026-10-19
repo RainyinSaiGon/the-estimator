@@ -58,6 +58,9 @@ class SuggestedPackage(BaseModel):
     owner: Literal["company", "customer", "vendor"]
     acceptance: str
     dependencies: str
+    basis: Literal["source", "inference"] = "inference"
+    sourceName: str = Field(default="", max_length=300)
+    evidence: str = Field(default="", max_length=2000)
 
 
 class WorkflowAnalysis(BaseModel):
@@ -97,7 +100,11 @@ customer entitlements, available team capacity, or a delivery duration. If the c
 capabilities do not confirm a skill, treat it as unknown.
 Propose deliverables, exclusions, acceptance criteria, dependencies, and prioritized
 clarification questions. Identify customer and vendor prerequisites. Reuse only configured
-task IDs; quantities are proposed units to be reviewed, never invented effort hours.
+task IDs allowed for the classified request type (or configured for all request types);
+quantities are proposed units to be reviewed, never invented effort hours.
+For each proposed package, cite a verbatim source passage and exact sourceName when the
+work is directly requested; otherwise mark its basis as inference and leave sourceName
+and evidence empty.
 For a sales inquiry without implementation scope, leave workPackages empty and ask for
 clarification. No numeric effort, pricing, or calendar commitment is allowed.
 All suggestions remain provisional until a human confirms the scope."""
@@ -108,7 +115,10 @@ def validate_analysis(result: WorkflowAnalysis, request: WorkflowInput) -> dict[
     sources = {str(item.get("name", "")): str(item.get("text", "")) for item in request.sources}
     keys = {item["key"] for item in request.configuration.get("fields", [])}
     products = {item["id"] for item in request.configuration.get("products", [])}
-    tasks = {item["id"] for item in request.configuration.get("tasks", [])}
+    tasks = {
+        item["id"] for item in request.configuration.get("tasks", [])
+        if not item.get("requestTypes") or payload["requestType"] in item["requestTypes"]
+    }
     knowledge = {item["sourceId"]: item for item in request.knowledge}
     for fact in payload["facts"]:
         if fact["key"] not in keys:
@@ -144,6 +154,12 @@ def validate_analysis(result: WorkflowAnalysis, request: WorkflowInput) -> dict[
     for item in payload["workPackages"]:
         if item["taskId"] not in tasks or not 0 < item["quantity"] <= 1_000_000:
             raise ValueError("AI returned an invalid task template or quantity.")
+        if item["basis"] == "source" and (
+            not item["evidence"] or item["evidence"] not in sources.get(item["sourceName"], "")
+        ):
+            item.update(basis="inference", sourceName="", evidence="")
+        elif item["basis"] == "inference":
+            item.update(sourceName="", evidence="")
     payload["sourceCheck"] = "Exact quotations checked; semantic support still needs human review."
     return payload
 

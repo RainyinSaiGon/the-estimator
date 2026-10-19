@@ -84,16 +84,18 @@ type CompanyAttachment struct {
 	Locators      []string `json:"locators"`
 }
 type KnowledgeDocument struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	URL         string     `json:"url"`
-	Text        string     `json:"text"`
-	SHA256      string     `json:"sha256"`
-	Status      string     `json:"status"`
-	RetrievedAt time.Time  `json:"retrievedAt"`
-	ApprovedAt  *time.Time `json:"approvedAt,omitempty"`
-	ApprovedBy  string     `json:"approvedBy,omitempty"`
-	ReplacesID  string     `json:"replacesId,omitempty"`
+	ID                   string     `json:"id"`
+	Title                string     `json:"title"`
+	URL                  string     `json:"url"`
+	Text                 string     `json:"text"`
+	SHA256               string     `json:"sha256"`
+	Status               string     `json:"status"`
+	RetrievedAt          time.Time  `json:"retrievedAt"`
+	ApprovedAt           *time.Time `json:"approvedAt,omitempty"`
+	ApprovedBy           string     `json:"approvedBy,omitempty"`
+	ReplacesID           string     `json:"replacesId,omitempty"`
+	LastRefreshAttemptAt *time.Time `json:"lastRefreshAttemptAt,omitempty"`
+	LastRefreshError     string     `json:"lastRefreshError,omitempty"`
 }
 type KnowledgePassage struct {
 	SourceID    string    `json:"sourceId"`
@@ -112,6 +114,20 @@ type CompanyWorkPackage struct {
 	Owner        string  `json:"owner"`
 	Acceptance   string  `json:"acceptance"`
 	Dependencies string  `json:"dependencies"`
+	Basis        string  `json:"basis,omitempty"`
+	SourceName   string  `json:"sourceName,omitempty"`
+	Evidence     string  `json:"evidence,omitempty"`
+}
+type CompanyTaskTracking struct {
+	BaselineID    string    `json:"baselineId"`
+	WorkPackageID string    `json:"workPackageId"`
+	Status        string    `json:"status"`
+	AssigneeID    string    `json:"assigneeId,omitempty"`
+	PlannedStart  string    `json:"plannedStart,omitempty"`
+	TargetDate    string    `json:"targetDate,omitempty"`
+	Note          string    `json:"note,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	UpdatedBy     string    `json:"updatedBy"`
 }
 type CompanyReview struct {
 	ConfigVersion             int                  `json:"configVersion"`
@@ -142,17 +158,18 @@ type CompanyEstimateTask struct {
 	ReferenceIDs []string `json:"referenceIds"`
 }
 type CompanyEstimate struct {
-	PlanningDays   float64               `json:"planningDays,omitempty"`
-	StaffCount     float64               `json:"staffCount,omitempty"`
-	DependencyDays float64               `json:"dependencyDays,omitempty"`
-	Hours          float64               `json:"hours"`
-	BaseHours      float64               `json:"baseHours"`
-	Low            float64               `json:"low"`
-	High           float64               `json:"high"`
-	Tasks          []CompanyEstimateTask `json:"tasks"`
-	ConfigVersion  int                   `json:"configVersion"`
-	EngineVersion  string                `json:"engineVersion"`
-	Limitation     string                `json:"limitation"`
+	PlanningDays          float64               `json:"planningDays,omitempty"`
+	ProjectedDeliveryDate string                `json:"projectedDeliveryDate,omitempty"`
+	StaffCount            float64               `json:"staffCount,omitempty"`
+	DependencyDays        float64               `json:"dependencyDays,omitempty"`
+	Hours                 float64               `json:"hours"`
+	BaseHours             float64               `json:"baseHours"`
+	Low                   float64               `json:"low"`
+	High                  float64               `json:"high"`
+	Tasks                 []CompanyEstimateTask `json:"tasks"`
+	ConfigVersion         int                   `json:"configVersion"`
+	EngineVersion         string                `json:"engineVersion"`
+	Limitation            string                `json:"limitation"`
 }
 type CompanyBaseline struct {
 	SourceText      string             `json:"sourceText"`
@@ -170,28 +187,29 @@ type CompanyBaseline struct {
 	Revision        int                `json:"revision"`
 }
 type CompanyRequest struct {
-	CreatedBy        string              `json:"createdBy"`
-	AnalysisAttempts int                 `json:"analysisAttempts"`
-	NextAttemptAt    *time.Time          `json:"nextAttemptAt,omitempty"`
-	ID               string              `json:"id"`
-	Title            string              `json:"title"`
-	Channel          string              `json:"channel"`
-	ExternalID       string              `json:"externalId"`
-	SourceIDs        []string            `json:"sourceIds"`
-	Text             string              `json:"text"`
-	Attachments      []CompanyAttachment `json:"attachments"`
-	CreatedAt        time.Time           `json:"createdAt"`
-	UpdatedAt        time.Time           `json:"updatedAt"`
-	Revision         int                 `json:"revision"`
-	Status           string              `json:"status"`
-	LastError        string              `json:"lastError,omitempty"`
-	Analysis         json.RawMessage     `json:"analysis,omitempty"`
-	Knowledge        []KnowledgePassage  `json:"knowledge"`
-	Review           CompanyReview       `json:"review"`
-	Estimate         *CompanyEstimate    `json:"estimate,omitempty"`
-	Baselines        []CompanyBaseline   `json:"baselines"`
-	Delivery         *deliveryOutcome    `json:"deliveryOutcome,omitempty"`
-	DeliveryHistory  []deliveryOutcome   `json:"deliveryHistory,omitempty"`
+	CreatedBy        string                `json:"createdBy"`
+	AnalysisAttempts int                   `json:"analysisAttempts"`
+	NextAttemptAt    *time.Time            `json:"nextAttemptAt,omitempty"`
+	ID               string                `json:"id"`
+	Title            string                `json:"title"`
+	Channel          string                `json:"channel"`
+	ExternalID       string                `json:"externalId"`
+	SourceIDs        []string              `json:"sourceIds"`
+	Text             string                `json:"text"`
+	Attachments      []CompanyAttachment   `json:"attachments"`
+	CreatedAt        time.Time             `json:"createdAt"`
+	UpdatedAt        time.Time             `json:"updatedAt"`
+	Revision         int                   `json:"revision"`
+	Status           string                `json:"status"`
+	LastError        string                `json:"lastError,omitempty"`
+	Analysis         json.RawMessage       `json:"analysis,omitempty"`
+	Knowledge        []KnowledgePassage    `json:"knowledge"`
+	Review           CompanyReview         `json:"review"`
+	Estimate         *CompanyEstimate      `json:"estimate,omitempty"`
+	Baselines        []CompanyBaseline     `json:"baselines"`
+	Tracking         []CompanyTaskTracking `json:"tracking,omitempty"`
+	Delivery         *deliveryOutcome      `json:"deliveryOutcome,omitempty"`
+	DeliveryHistory  []deliveryOutcome     `json:"deliveryHistory,omitempty"`
 }
 type CompanyConnector struct {
 	Connected    bool              `json:"connected"`
@@ -223,6 +241,12 @@ type companyAction struct {
 	Automatic            bool                `json:"automatic"`
 	StaffCount           float64             `json:"staffCount"`
 	DependencyDays       float64             `json:"dependencyDays"`
+	StartDate            string              `json:"startDate"`
+	WorkPackageID        string              `json:"workPackageId"`
+	TrackingStatus       string              `json:"status"`
+	AssigneeID           string              `json:"assigneeId"`
+	PlannedStart         string              `json:"plannedStart"`
+	TargetDate           string              `json:"targetDate"`
 	Action               string              `json:"action"`
 	ExpectedVersion      int64               `json:"expectedVersion"`
 	ExpectedRevision     int                 `json:"expectedRevision"`
@@ -385,7 +409,7 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 	if r.Method != "GET" {
 		scope = "workflow:write"
 	}
-	if path == "jobs" || strings.HasPrefix(path, "context/") {
+	if path == "jobs" || strings.HasPrefix(path, "context/") || strings.HasSuffix(path, "/knowledge-refresh-context") {
 		scope = "workflow:worker"
 	} else if strings.HasSuffix(path, "/connector-secret") {
 		scope = "workflow:connector"
@@ -454,6 +478,8 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 			writeJSON(w, 200, map[string]any{"gmail": company.Gmail, "webhookSecret": company.WebhookSecret})
 		case len(parts) == 3 && parts[2] == "knowledge":
 			writeJSON(w, 200, map[string]any{"passages": searchCompanyKnowledge(company, r.URL.Query().Get("q"))})
+		case len(parts) == 3 && parts[2] == "knowledge-refresh-context":
+			writeJSON(w, 200, map[string]any{"config": company.Config, "knowledge": company.Knowledge})
 		case len(parts) == 3 && parts[2] == "evaluation":
 			writeJSON(w, 200, evaluateCompany(company))
 		case len(parts) == 3 && parts[2] == "export":
@@ -673,6 +699,7 @@ func (store *recordStore) companyJobs(w http.ResponseWriter, r *http.Request) {
 	defer rows.Close()
 	jobs := []map[string]string{}
 	analysisJobs := []map[string]string{}
+	knowledgeJobs := []map[string]string{}
 	for rows.Next() {
 		var id string
 		var nonce, ciphertext []byte
@@ -690,6 +717,22 @@ func (store *recordStore) companyJobs(w http.ResponseWriter, r *http.Request) {
 		if c.Gmail.Connected && c.Gmail.LinkedBy != "" && (c.Gmail.LeaseUntil == nil || c.Gmail.LeaseUntil.Before(time.Now())) {
 			jobs = append(jobs, map[string]string{"companyId": id, "accountId": c.Gmail.LinkedBy})
 		}
+		adminID := ""
+		for _, member := range c.Members {
+			if member.Role == "admin" {
+				adminID = member.AccountID
+				break
+			}
+		}
+		for _, source := range c.Knowledge {
+			lastAttempt := source.RetrievedAt
+			if source.LastRefreshAttemptAt != nil {
+				lastAttempt = *source.LastRefreshAttemptAt
+			}
+			if source.Status == "approved" && source.URL != "" && adminID != "" && !lastAttempt.After(time.Now().Add(-30*24*time.Hour)) {
+				knowledgeJobs = append(knowledgeJobs, map[string]string{"companyId": id, "accountId": adminID, "documentId": source.ID})
+			}
+		}
 		for _, request := range c.Requests {
 			activeCreator := false
 			for _, member := range c.Members {
@@ -704,7 +747,7 @@ func (store *recordStore) companyJobs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	writeJSON(w, 200, map[string]any{"jobs": jobs, "analysisJobs": analysisJobs})
+	writeJSON(w, 200, map[string]any{"jobs": jobs, "analysisJobs": analysisJobs, "knowledgeJobs": knowledgeJobs})
 }
 func sourceText(r CompanyRequest) string {
 	parts := []string{r.Text}
@@ -730,7 +773,7 @@ func pruneCompany(c *WorkflowCompany, now time.Time) {
 	c.Requests = kept
 }
 func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *WorkflowCompany, role string, p recordPrincipal, a companyAction) (string, error) {
-	admin := []string{"config", "member", "removeMember", "knowledge.add", "knowledge.approve", "knowledge.retire", "gmail.configure", "gmail.tokens", "gmail.disconnect", "webhook.rotate", "knowledge.token.rotate", "knowledge.token.revoke"}
+	admin := []string{"config", "member", "removeMember", "knowledge.add", "knowledge.approve", "knowledge.retire", "knowledge.refresh.failed", "gmail.configure", "gmail.tokens", "gmail.disconnect", "webhook.rotate", "knowledge.token.rotate", "knowledge.token.revoke"}
 	if containsString(admin, a.Action) && role != "admin" {
 		return "", workflowFailure{403, "Only a company administrator can perform this action."}
 	}
@@ -819,8 +862,38 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		d.RetrievedAt = now
 		d.ApprovedAt = nil
 		d.ApprovedBy = ""
+		if d.ReplacesID != "" {
+			found := false
+			for i := range c.Knowledge {
+				if c.Knowledge[i].ID == d.ReplacesID && c.Knowledge[i].Status == "approved" && c.Knowledge[i].URL != "" {
+					c.Knowledge[i].LastRefreshAttemptAt = &now
+					c.Knowledge[i].LastRefreshError = ""
+					found = true
+				}
+			}
+			if !found {
+				return "", workflowBad("The approved web source to refresh no longer exists.")
+			}
+		}
 		c.Knowledge = append(c.Knowledge, d)
 		return d.ID, nil
+	case "knowledge.refresh.failed":
+		found := false
+		for i := range c.Knowledge {
+			d := &c.Knowledge[i]
+			if d.ID == a.DocumentID && d.Status == "approved" && d.URL != "" {
+				d.LastRefreshAttemptAt = &now
+				d.LastRefreshError = a.Error
+				if len(d.LastRefreshError) > 300 {
+					d.LastRefreshError = d.LastRefreshError[:300]
+				}
+				found = true
+			}
+		}
+		if !found {
+			return "", workflowBad("The approved web source to refresh no longer exists.")
+		}
+		return a.DocumentID, nil
 	case "knowledge.approve", "knowledge.retire":
 		for i := range c.Knowledge {
 			d := &c.Knowledge[i]
@@ -1063,7 +1136,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		request.Review.ConfirmedAt = nil
 		request.Estimate = nil
 	case "review":
-		if err := validateCompanyReview(c.Config, a.Review); err != nil {
+		if err := validateCompanyReviewForRequest(c.Config, a.Review, *request); err != nil {
 			return "", err
 		}
 		a.Review.ConfirmedBy = ""
@@ -1117,6 +1190,13 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 			estimate.StaffCount = a.StaffCount
 			estimate.DependencyDays = a.DependencyDays
 			estimate.PlanningDays = estimate.Hours/(c.Config.HoursPerDay*a.StaffCount) + a.DependencyDays
+			if a.StartDate != "" {
+				start, parseErr := time.Parse("2006-01-02", a.StartDate)
+				if parseErr != nil {
+					return "", workflowBad("Choose a valid project start date.")
+				}
+				estimate.ProjectedDeliveryDate = projectedWorkdayDate(start, estimate.PlanningDays).Format("2006-01-02")
+			}
 		}
 		request.Estimate = &estimate
 		request.Status = "estimated"
@@ -1141,7 +1221,76 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 			return "", err
 		}
 		request.Baselines = append(request.Baselines, frozen)
+		for _, work := range frozen.Review.WorkPackages {
+			request.Tracking = append(request.Tracking, CompanyTaskTracking{
+				BaselineID: frozen.ID, WorkPackageID: work.ID, Status: "not_started",
+			})
+		}
 		request.Status = "frozen"
+	case "tracking.update":
+		if len(request.Baselines) == 0 || request.Status != "frozen" && request.Status != "tracking" {
+			return "", workflowBad("Freeze a reviewed estimate before updating delivery tracking.")
+		}
+		baseline := request.Baselines[len(request.Baselines)-1]
+		if a.BaselineID != baseline.ID {
+			return "", workflowBad("Tracking can only be updated for the current frozen baseline.")
+		}
+		if !containsString([]string{"not_started", "in_progress", "blocked", "completed", "accepted"}, a.TrackingStatus) {
+			return "", workflowBad("Choose a valid task progress status.")
+		}
+		var work *CompanyWorkPackage
+		for i := range baseline.Review.WorkPackages {
+			if baseline.Review.WorkPackages[i].ID == a.WorkPackageID {
+				work = &baseline.Review.WorkPackages[i]
+				break
+			}
+		}
+		if work == nil {
+			return "", workflowBad("The task is not part of the frozen baseline.")
+		}
+		if a.AssigneeID != "" {
+			if work.Owner != "company" {
+				return "", workflowBad("Only company-owned tasks can be assigned to a company member.")
+			}
+			memberFound := false
+			for _, member := range c.Members {
+				if member.AccountID == a.AssigneeID {
+					memberFound = true
+					break
+				}
+			}
+			if !memberFound {
+				return "", workflowBad("Choose a current company member for this task.")
+			}
+		}
+		if len(a.Note) > 1000 || strings.ContainsRune(a.Note, '\x00') {
+			return "", workflowBad("Task progress notes must be 1,000 characters or fewer.")
+		}
+		if !validWorkDate(a.PlannedStart) || !validWorkDate(a.TargetDate) {
+			return "", workflowBad("Enter valid task dates in YYYY-MM-DD format.")
+		}
+		if a.PlannedStart != "" && a.TargetDate != "" && a.TargetDate < a.PlannedStart {
+			return "", workflowBad("A task target date cannot be before its planned start date.")
+		}
+		updated := CompanyTaskTracking{
+			BaselineID: baseline.ID, WorkPackageID: work.ID, Status: a.TrackingStatus,
+			AssigneeID: a.AssigneeID, PlannedStart: a.PlannedStart, TargetDate: a.TargetDate,
+			Note: strings.TrimSpace(a.Note), UpdatedAt: now, UpdatedBy: p.subject,
+		}
+		replaced := false
+		for i := range request.Tracking {
+			if request.Tracking[i].BaselineID == baseline.ID && request.Tracking[i].WorkPackageID == work.ID {
+				request.Tracking[i] = updated
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			request.Tracking = append(request.Tracking, updated)
+		}
+		request.Status = "tracking"
+		request.UpdatedAt = now
+		return request.ID + ":" + work.ID, nil
 	case "delivery":
 		var b *CompanyBaseline
 		for i := range request.Baselines {
@@ -1254,6 +1403,9 @@ func sameStringSet(a, b []string) bool {
 	return true
 }
 func validateCompanyReview(config CompanyConfig, r CompanyReview) error {
+	return validateCompanyReviewForRequest(config, r, CompanyRequest{})
+}
+func validateCompanyReviewForRequest(config CompanyConfig, r CompanyReview, request CompanyRequest) error {
 	if !containsString(requestTypes(), r.RequestType) {
 		return workflowBad("Choose a request classification.")
 	}
@@ -1334,6 +1486,25 @@ func validateCompanyReview(config CompanyConfig, r CompanyReview) error {
 		}
 		if r.Confirmed && strings.TrimSpace(w.Acceptance) == "" {
 			return workflowBad("Define completion criteria for every work package.")
+		}
+		if w.Basis != "" && w.Basis != "source" && w.Basis != "inference" {
+			return workflowBad("Choose whether each task is source-based or an inference.")
+		}
+		if w.Basis == "source" {
+			verified := false
+			if w.SourceName == "Message" && w.Evidence != "" && strings.Contains(request.Text, w.Evidence) {
+				verified = true
+			}
+			for i, attachment := range request.Attachments {
+				if w.SourceName == fmt.Sprintf("%d: %s", i+1, attachment.Name) && w.Evidence != "" && strings.Contains(attachment.Text, w.Evidence) {
+					verified = true
+				}
+			}
+			if !verified {
+				return workflowBad("Task evidence must quote the matching original message or attachment.")
+			}
+		} else if w.Basis == "inference" && (w.SourceName != "" || w.Evidence != "") {
+			return workflowBad("Inferred tasks cannot claim a source quotation.")
 		}
 	}
 	if r.Confirmed && (strings.TrimSpace(r.Deliverables) == "" || strings.TrimSpace(r.Acceptance) == "") {
@@ -1429,6 +1600,30 @@ func estimateCompanyRequest(c *WorkflowCompany, r CompanyRequest) (CompanyEstima
 	}
 	return result, nil
 }
+func projectedWorkdayDate(start time.Time, workingDays float64) time.Time {
+	date := time.Date(start.Year(), start.Month(), start.Day(), 0, 0, 0, 0, time.UTC)
+	for date.Weekday() == time.Saturday || date.Weekday() == time.Sunday {
+		date = date.AddDate(0, 0, 1)
+	}
+	remaining := int(math.Ceil(workingDays))
+	if remaining > 0 {
+		remaining--
+	}
+	for remaining > 0 {
+		date = date.AddDate(0, 0, 1)
+		if date.Weekday() != time.Saturday && date.Weekday() != time.Sunday {
+			remaining--
+		}
+	}
+	return date
+}
+func validWorkDate(value string) bool {
+	if value == "" {
+		return true
+	}
+	_, err := time.Parse("2006-01-02", value)
+	return err == nil
+}
 func (store *recordStore) cleanupCompanyRetention(ctx context.Context) error {
 	if store == nil {
 		return nil
@@ -1467,7 +1662,19 @@ func (store *recordStore) cleanupCompanyRetention(ctx context.Context) error {
 			continue
 		}
 		before := len(company.Requests)
+		retained := map[string]bool{}
 		pruneCompany(&company, time.Now())
+		for _, request := range company.Requests {
+			retained[request.ID] = true
+		}
+		for _, requestID := range requestIDsFromCompanyJSON(raw) {
+			if !retained[requestID] {
+				if _, e = tx.Exec(ctx, "DELETE FROM workflow_attachments WHERE company_id=$1 AND request_id=$2", id, requestID); e != nil {
+					_ = tx.Rollback(ctx)
+					return e
+				}
+			}
+		}
 		company.Version = version + 1
 		if before != len(company.Requests) {
 			if e = store.saveCompany(ctx, tx, &company); e != nil {
@@ -1482,6 +1689,17 @@ func (store *recordStore) cleanupCompanyRetention(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+func requestIDsFromCompanyJSON(raw []byte) []string {
+	var company WorkflowCompany
+	if json.Unmarshal(raw, &company) != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(company.Requests))
+	for _, request := range company.Requests {
+		ids = append(ids, request.ID)
+	}
+	return ids
 }
 func searchCompanyKnowledge(c *WorkflowCompany, query string) []KnowledgePassage {
 	tokens := strings.FieldsFunc(strings.ToLower(query), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) })

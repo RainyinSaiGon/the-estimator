@@ -1,6 +1,6 @@
 import { applyAction, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
 import { env } from "cloudflare:workers";
-import { getChatGPTUser } from "../../chatgpt-auth";
+import { companyWorkspaceAccess } from "../../../lib/company-workspace-access";
 import { requireCompanyRole } from "../../../lib/workflow-governance";
 import { workflowDb } from "../../../lib/workflow-governance";
 import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
@@ -26,8 +26,9 @@ async function rejectPost(request: Request, error: string, status: number) {
 }
 
 export async function GET(request: Request) {
-  const user = await getChatGPTUser();
-  if (!user) return Response.json({ error: "Sign in to open your company workspace." }, { status: 401 });
+  const access = await companyWorkspaceAccess();
+  if (!access) return Response.json({ error: "Sign in to open your company workspace." }, { status: 401 });
+  const { user } = access;
   try {
     await ensureClientWorkflowSchema();
     const url = new URL(request.url);
@@ -46,8 +47,9 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
-  if (!user) return rejectPost(request, "Sign in before changing company workspace data.", 401);
+  const access = await companyWorkspaceAccess();
+  if (!access) return rejectPost(request, "Sign in before changing company workspace data.", 401);
+  const { user } = access;
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin) return rejectPost(request, "This request must come from your workspace.", 403);
   const bucket = (env as unknown as { BUCKET?: R2Bucket }).BUCKET;
@@ -102,6 +104,9 @@ export async function POST(request: Request) {
       const parsed = JSON.parse(serialized) as { action?: string; attachments?: unknown[] };
       if (parsed.action === "createRequest" && Array.isArray(parsed.attachments) && parsed.attachments.length > 0) return Response.json({ error: "Request files must use the private file upload route." }, { status: 400 });
       body = parsed;
+    }
+    if (access.publicDemo && body && typeof body === "object" && ["rotateCredential", "revokeCredential"].includes(String((body as { action?: unknown }).action))) {
+      return Response.json({ error: "External connector credentials are disabled in the public demo." }, { status: 403, headers: { "Cache-Control": "no-store" } });
     }
     return Response.json(await applyAction(user.userId, user.displayName, body), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {

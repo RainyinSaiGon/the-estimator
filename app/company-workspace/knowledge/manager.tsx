@@ -11,7 +11,7 @@ type Source = {
 };
 type KnowledgeState = { company: { id: string; name: string; version: number }; policyVersion: number; allowedDomains: string[]; sources: Source[] };
 
-export default function KnowledgeSourcesManager({ userName }: { userName: string }) {
+export default function KnowledgeSourcesManager({ userName, publicDemo = false }: { userName: string; publicDemo?: boolean }) {
   const [state, setState] = useState<KnowledgeState>();
   const [domainText, setDomainText] = useState("");
   const [sourceUrl, setSourceUrl] = useState("");
@@ -76,6 +76,8 @@ export default function KnowledgeSourcesManager({ userName }: { userName: string
       <div className="flex min-w-0 items-start gap-3"><span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-estimator-signal text-estimator-signal-ink"><BookOpenCheck size={20}/></span><div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">The Estimator · company knowledge</p><h1 className="mt-1 text-2xl font-semibold tracking-tight text-estimator-ink sm:text-3xl">Approved sources</h1><p className="mt-1.5 max-w-2xl text-sm leading-6 text-estimator-muted">{state ? `${state.company.name} · ` : ""}Managed by {userName}. New pages stay in draft until an administrator reviews them.</p></div></div>
       <a className={secondary + " shrink-0"} href={state ? `/company-workspace?company=${encodeURIComponent(state.company.id)}` : "/company-workspace"}><ArrowLeft size={16}/>Back to workspace</a>
     </header>
+
+    {publicDemo && <aside role="note" className="mb-6 rounded-2xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm leading-6 text-amber-950 sm:px-5"><strong className="font-semibold">Public interactive demo.</strong> Knowledge and configuration changes are visible to every demo visitor. Use synthetic information only.</aside>}
 
     {error && <div role="alert" className="mt-5 rounded-2xl border border-red-200 bg-red-50 p-4 text-sm leading-6 text-red-900">{error}</div>}
     {notice && <div role="status" className="mt-5 rounded-2xl border border-emerald-200 bg-emerald-50 p-4 text-sm leading-6 text-emerald-950">{notice}</div>}

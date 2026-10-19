@@ -1,10 +1,10 @@
 import CompanyWorkspace from "./workspace";
-import { getChatGPTUser } from "../chatgpt-auth";
+import { companyWorkspaceAccess } from "../../lib/company-workspace-access";
 
 export const dynamic = "force-dynamic";
 export const metadata = { title: "Company request workspace · The Estimator" };
 
 export default async function CompanyWorkspacePage() {
-  const user = await getChatGPTUser();
-  return <CompanyWorkspace userName={user?.displayName ?? ""} guest={!user} />;
+  const access = await companyWorkspaceAccess();
+  return <CompanyWorkspace userName={access?.user.displayName ?? ""} guest={!access} publicDemo={access?.publicDemo ?? false} />;
 }

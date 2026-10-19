@@ -1,5 +1,6 @@
 FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 HOST=0.0.0.0 PORT=8001 REQUEST_TIMEOUT_SECONDS=40
+RUN apt-get update && apt-get install -y --no-install-recommends tesseract-ocr tesseract-ocr-eng && rm -rf /var/lib/apt/lists/*
 WORKDIR /srv
 COPY services/brief-intelligence/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
