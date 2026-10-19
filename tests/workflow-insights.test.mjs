@@ -4,8 +4,14 @@ import { workflowInsights } from "../lib/workflow-insights.ts";
 
 function request(overrides = {}) {
   return {
-    id: "request-one", title: "Client brief", status: "needs_review", baselines: [],
-    review: { confirmed: false, workPackages: [{ id: "task-one" }], findingReviews: {}, questionResolutions: {} },
+    id: "request-one", title: "Client brief", status: "needs_review", baselines: [], attachments: [],
+    review: {
+      confirmed: false, requestType: "integration", domain: "CRM integration",
+      deliverables: "Import customer contacts.", acceptance: "The agreed contact sample reconciles.",
+      dependencies: "Customer provides the export.", questions: ["Who owns the export?"],
+      workPackages: [{ id: "task-one", acceptance: "Import reconciles.", dependencies: "Customer export is available." }],
+      findingReviews: {}, questionResolutions: {},
+    },
     analysis: {
       facts: [{ status: "source", source: "brief.pdf · page 2", evidence: "Import the contacts." }, { status: "inference", source: "", evidence: "" }],
       productFindings: [{ status: "unknown" }], capabilityFindings: [], assumptions: [], conflicts: [],

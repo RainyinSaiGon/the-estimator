@@ -96,7 +96,7 @@ export function DeliveryPanel({ company, request, actorId, busy, action }: { com
 
 export function EvaluationPanel({ company, publicDemo = false, onOpenRequest, onOpenRequests }: { company: Company; publicDemo?: boolean; onOpenRequest: (id: string, action?: string) => void; onOpenRequests: () => void }) {
   const [view, setView] = useState<"ai" | "delivery">("ai");
-  const insights = workflowInsights(company.requests);
+  const insights = workflowInsights(company.requests, company.config);
   const evaluation = company.evaluation;
   const committedRequest = company.requests.find(request => request.baselines.length > 0);
   function deliveryMetrics(cohort: "recorded" | "synthetic") {

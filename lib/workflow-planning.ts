@@ -1,6 +1,5 @@
 import {
   applyApprovedTrainingHistory,
-  scopeReviewBlockers,
   type ClientRequest,
   type Company,
   type ScopeReview,
@@ -8,6 +7,8 @@ import {
   type WorkflowEstimate,
 } from "./client-workflow-types";
 import { ClientWorkflowError } from "./workflow-errors";
+import { evaluateScopeReadiness } from "./review-policy";
+import { reviewBlockerMessages } from "./review-policy-messages";
 
 export function makeEstimate(
   review: ScopeReview,
@@ -60,26 +61,5 @@ export function makeEstimate(
 }
 
 export function scopeReadinessBlockers(request: ClientRequest, company: Company): string[] {
-  if (!request.analysis) return ["Analyze the request before confirming or estimating its scope."];
-  const blockers = scopeReviewBlockers(request.review, request.analysis);
-  if (!request.review.deliverables.trim())
-    blockers.push("Add at least one deliverable before confirming the scope.");
-  if (!request.review.domain?.trim())
-    blockers.push("Add a reviewed work domain before confirming the scope.");
-  const missing = company.config.fields.filter(
-    (field) =>
-      field.required &&
-      field.requestTypes.includes(request.review.requestType) &&
-      !request.review.fieldAnswers?.[field.key]?.trim(),
-  );
-  if (missing.length)
-    blockers.push(`Complete required fields: ${missing.map((field) => field.label).join(", ")}.`);
-  if (
-    request.attachments.some((file) => file.status !== "extracted" || file.truncated) &&
-    !request.review.sourceLimitationsAcknowledged
-  )
-    blockers.push(
-      "Reconcile incomplete sources and acknowledge their limitations before confirming scope.",
-    );
-  return blockers;
+  return reviewBlockerMessages(evaluateScopeReadiness(request, request.review, company.config).blockers);
 }

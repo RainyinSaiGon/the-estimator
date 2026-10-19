@@ -1,3 +1,6 @@
+import { evaluateReviewDecisions } from "./review-policy.ts";
+import { reviewBlockerMessages } from "./review-policy-messages.ts";
+
 export const requestTypes = ["demo", "setup", "migration", "integration", "customization", "support"] as const;
 export type RequestType = typeof requestTypes[number];
 export type RequestStatus = "received" | "analyzing" | "needs_review" | "scope_confirmed" | "estimated" | "frozen" | "analysis_failed";
@@ -118,38 +121,9 @@ export type Company = {
 export type CompanySummary = { id: string; name: string; version: number; role: CompanyRole; requestCount: number };
 export type WorkspaceResponse = { companies: CompanySummary[]; company?: Company; selectedId?: string; aiReady: boolean; actorId: string; issuedCredential?: { kind: "webhook" | "mcp"; value: string } };
 
+/** Compatibility helper for callers that validate only review decisions. */
 export function scopeReviewBlockers(review: ScopeReview, analysis: ClientAnalysis): string[] {
-  const blockers: string[] = [];
-  if (!review.acceptance?.trim()) blockers.push("Add global acceptance criteria, or explicitly state that no additional criteria apply.");
-  if (!review.dependencies?.trim()) blockers.push("Describe the prerequisites and their owners, or explicitly state that no dependencies are known.");
-  if (review.workPackages.some(item => !item.acceptance?.trim() || !item.dependencies?.trim())) blockers.push("Every work package needs acceptance criteria and an explicit dependency statement. Use ‘None identified’ when appropriate.");
-  if (review.questions.length !== analysis.questions.length || review.questions.some((question, index) => question !== analysis.questions[index])) blockers.push("Keep the original analysis questions unchanged; resolve them individually below.");
-  const questionResolutions = review.questionResolutions ?? {};
-  if (analysis.questions.some((_, index) => {
-    const resolution = questionResolutions[`analysis:${index}`];
-    return !resolution?.disposition || typeof resolution.resolution !== "string" || !resolution.resolution.trim();
-  })) blockers.push("Resolve every analysis question with an answer or not-applicable rationale.");
-  for (const [key, resolution] of Object.entries(questionResolutions)) {
-    if (key.startsWith("analysis:")) {
-      const match = /^analysis:(0|[1-9]\d*)$/.exec(key);
-      if (!match || Number(match[1]) >= analysis.questions.length) blockers.push("Remove unsupported analysis-question resolution entries.");
-    } else if (!/^review:[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(key) || !resolution.question?.trim() || !resolution.disposition || typeof resolution.resolution !== "string" || !resolution.resolution.trim()) {
-      blockers.push("Resolve every reviewer-added question with an answer or not-applicable rationale.");
-    }
-  }
-  const expectedFindingKeys = [
-    ...(analysis.facts ?? []).map((_, index) => `fact:${index}`),
-    ...(analysis.productFindings ?? []).map((_, index) => `product:${index}`),
-    ...(analysis.capabilityFindings ?? []).map((_, index) => `capability:${index}`),
-    ...(analysis.assumptions ?? []).map((_, index) => `assumption:${index}`),
-    ...(analysis.conflicts ?? []).map((_, index) => `conflict:${index}`),
-  ];
-  const findingReviews = review.findingReviews ?? {};
-  if (expectedFindingKeys.some(key => {
-    const finding = findingReviews[key];
-    return !finding || ((finding.disposition === "corrected" || finding.disposition === "rejected") && !finding.correction?.trim());
-  }) || Object.keys(findingReviews).some(key => !expectedFindingKeys.includes(key))) blockers.push("Review every extracted fact and product or capability finding. Add a correction or reason when changing or rejecting a finding.");
-  return [...new Set(blockers)];
+  return reviewBlockerMessages(evaluateReviewDecisions(review, analysis).blockers);
 }
 
 const TRAINING_MINIMUM_SAMPLES = 3;
