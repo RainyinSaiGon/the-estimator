@@ -35,8 +35,12 @@ The native web BFF exposes these company-neutral endpoints. All responses contai
 Browser action names:
 
 - Admin: `config`, `member`, `removeMember`, `knowledge.add`, `knowledge.approve`, `knowledge.retire`, `knowledge.token.rotate`, `knowledge.token.revoke`, `gmail.configure`, `webhook.rotate`, `request.delete`.
-- Company members: `request.update`, `analysis.retry`, `review`, `estimate`, `freeze`, `delivery`.
+- Company members: `request.update`, `analysis.retry`, `review`, `estimate`, `freeze`, `tracking.update`, `delivery`.
 - Designated independent reviewer/admin: `delivery.review`.
+
+`review.workPackages[]` may include `basis` (`source` or `inference`), `sourceName`, and `evidence`. A source-based package must quote the matching original message or attachment; inferred packages cannot claim a quotation. Analysis suggestions are provisional and never supply numeric effort. The company estimator calculates task ranges only after a human confirms scope.
+
+`tracking.update` accepts `baselineId`, `workPackageId`, `status` (`not_started`, `in_progress`, `blocked`, `completed`, or `accepted`), optional `assigneeId`, `plannedStart`, `targetDate`, and `note`. The task must belong to the current frozen baseline. An assignee must be a current company member, and only company-owned work can be assigned internally. Dates use `YYYY-MM-DD`; the target cannot precede the planned start. The aggregate response exposes per-task `tracking` with `updatedAt` and `updatedBy`. Tracking is mutable operational progress, stored outside the immutable baseline and included in the normal company audit trail.
 
 The original submitter can use `delivery.revise` on rejected actuals. The prior submission and reviewer decisions are retained in `deliveryHistory` and excluded from training/evaluation; corrected actuals require a new independent decision. Approved actuals cannot be rewritten through this action.
 

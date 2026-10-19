@@ -73,3 +73,17 @@ test("completed email work is not analyzed again on the next poll", async () => 
   assert.equal(second.imported, 0);
   assert.equal(second.requestsAnalyzed, 0);
 });
+
+test("due approved sources are refreshed in a bounded worker batch", async () => {
+  const jobs = Array.from({ length: 5 }, (_, index) => ({ companyId: "company", accountId: "admin", documentId: "source-" + index }));
+  const refreshed = [];
+  const result = await runWorkflowCycle({
+    loadJobs: async () => ({ jobs: [], knowledgeJobs: jobs }),
+    syncMailbox: async () => ({ imported: 0 }),
+    analyzeRequest: async () => undefined,
+    refreshKnowledge: async job => refreshed.push(job.documentId),
+  });
+  assert.deepEqual(refreshed, ["source-0", "source-1", "source-2"]);
+  assert.equal(result.sourcesRefreshed, 3);
+  assert.equal(result.failed, 0);
+});

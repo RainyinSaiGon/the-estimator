@@ -20,10 +20,14 @@ from xml.etree import ElementTree
 
 from fastapi import HTTPException
 from pypdf import PdfReader
+import pymupdf as fitz
+import pytesseract
+from PIL import Image
 
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 MAX_EXTRACTED_CHARS = 20_000
+MAX_OCR_PAGES = 10
 MAX_ARCHIVE_FILES = 2_000
 MAX_ARCHIVE_UNPACKED_BYTES = 30 * 1024 * 1024
 SUPPORTED_EXTENSIONS = {".pdf", ".docx", ".xlsx", ".pptx", ".csv", ".txt", ".md", ".json", ".eml"}
@@ -170,8 +174,20 @@ def extract_document(filename: str, raw: bytes) -> dict[str, str | bool]:
             if len(reader.pages) > 150:
                 raise HTTPException(status_code=413, detail="PDF files are limited to 150 pages.")
             pages = [page.extract_text() or "" for page in reader.pages]
-            if len("".join(pages).strip()) < 30:
-                raise HTTPException(status_code=422, detail="Not enough readable PDF text was found. Scanned images need OCR before analysis.")
+            image_pages = [index for index, value in enumerate(pages) if len(value.strip()) < 30]
+            if image_pages:
+                if len(image_pages) > MAX_OCR_PAGES:
+                    raise HTTPException(status_code=413, detail=f"OCR is limited to {MAX_OCR_PAGES} scanned pages per PDF. Split the document and upload reviewed parts.")
+                try:
+                    document = fitz.open(stream=raw, filetype="pdf")
+                    for index in image_pages:
+                        pixmap = document[index].get_pixmap(matrix=fitz.Matrix(1.7, 1.7), colorspace=fitz.csGRAY, alpha=False)
+                        image = Image.frombytes("L", [pixmap.width, pixmap.height], pixmap.samples, "raw", "L", pixmap.stride)
+                        pages[index] = pytesseract.image_to_string(image, lang="eng", timeout=2)
+                except Exception as error:  # noqa: BLE001 - OCR errors are normalized for the API.
+                    raise HTTPException(status_code=422, detail="Scanned PDF OCR could not complete. Check image quality or upload a searchable PDF.") from error
+            if len("".join(pages).strip()) < 15:
+                raise HTTPException(status_code=422, detail="OCR did not find enough readable text in this PDF. Check image quality or upload a searchable PDF.")
             text = "\n".join(f"Page {index}\n{value}" for index, value in enumerate(pages, 1))
         except HTTPException:
             raise

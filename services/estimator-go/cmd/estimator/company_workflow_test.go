@@ -179,6 +179,27 @@ func TestCompanyCalendarUsesExplicitStaffingAssumptions(t *testing.T) {
 		t.Fatal("calendar scenario ignored configured hours, staffing, or delay")
 	}
 }
+func TestProjectedDeliveryDateSkipsWeekends(t *testing.T) {
+	start, err := time.Parse("2006-01-02", "2026-10-23") // Friday
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := projectedWorkdayDate(start, 3).Format("2006-01-02")
+	if got != "2026-10-27" { // Friday, Monday, Tuesday
+		t.Fatalf("expected Tuesday finish after three working days, got %s", got)
+	}
+}
+func TestRetentionPolicyPrunesRequestsAfterConfiguredAge(t *testing.T) {
+	now := time.Date(2026, 10, 19, 12, 0, 0, 0, time.UTC)
+	c := WorkflowCompany{Config: CompanyConfig{RetentionDays: 30}, Requests: []CompanyRequest{
+		{ID: "expired", UpdatedAt: now.Add(-31 * 24 * time.Hour)},
+		{ID: "retained", UpdatedAt: now.Add(-29 * 24 * time.Hour)},
+	}}
+	pruneCompany(&c, now)
+	if len(c.Requests) != 1 || c.Requests[0].ID != "retained" {
+		t.Fatalf("expected only the in-retention request to remain, got %#v", c.Requests)
+	}
+}
 func TestRetiredKnowledgeBlocksNewFreeze(t *testing.T) {
 	c := workflowFixture()
 	c.Requests = []CompanyRequest{{ID: companyOther, Revision: 1, Review: workflowReview(), Knowledge: []KnowledgePassage{{SourceID: "retired", SHA256: "digest"}}}}

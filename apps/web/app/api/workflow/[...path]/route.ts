@@ -10,7 +10,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 export const maxDuration = 300;
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const browserActions = ["config", "member", "removeMember", "knowledge.add", "knowledge.approve", "knowledge.retire", "knowledge.token.rotate", "knowledge.token.revoke", "review", "estimate", "freeze", "delivery", "delivery.review", "delivery.revise", "request.delete", "request.update", "analysis.retry", "gmail.configure", "webhook.rotate"];
+const browserActions = ["config", "member", "removeMember", "knowledge.add", "knowledge.approve", "knowledge.retire", "knowledge.token.rotate", "knowledge.token.revoke", "review", "estimate", "freeze", "tracking.update", "delivery", "delivery.review", "delivery.revise", "request.delete", "request.update", "analysis.retry", "gmail.configure", "webhook.rotate"];
 async function parseJSON(request: Request) {
   try { return JSON.parse(new TextDecoder().decode(await readWorkflowBody(request))) as Record<string, unknown>; }
   catch (error) { if (error instanceof WorkflowError) throw error; throw new WorkflowError("Use a valid JSON request."); }
@@ -36,6 +36,18 @@ async function worker(request: Request) {
     loadJobs: () => workflowData<WorkflowJobs>("jobs", "GET", undefined, actor, "workflow:worker"),
     syncMailbox: syncGmail,
     analyzeRequest: (companyId, requestId, accountId) => analyzeCompanyRequest(companyId, requestId, accountId, true),
+    refreshKnowledge: async job => {
+      const company = await workflowData<Company>("companies/" + job.companyId + "/knowledge-refresh-context", "GET", undefined, job.accountId, "workflow:worker");
+      const source = company.knowledge.find(item => item.id === job.documentId && item.status === "approved" && item.url);
+      if (!source) return;
+      try {
+        const refreshed = await briefWorkflow<{ url: string; text: string }>("fetch", { url: source.url, approvedDomains: company.config.approvedDomains });
+        await companyAction(job.companyId, { action: "knowledge.add", document: { title: source.title, url: refreshed.url, text: refreshed.text, replacesId: source.id } }, job.accountId);
+      } catch (error) {
+        await companyAction(job.companyId, { action: "knowledge.refresh.failed", documentId: source.id, error: error instanceof Error ? error.message : "Source refresh failed." }, job.accountId).catch(() => undefined);
+        throw error;
+      }
+    },
   }));
 }
 async function handle(request: Request, { params }: { params: Promise<{ path: string[] }> }) {
