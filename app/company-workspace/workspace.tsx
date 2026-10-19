@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from
 import { ArrowLeft, Check, CheckCircle2, ClipboardList, FileText, History, Layers3, Loader2, Plug, Plus, Settings2, ShieldCheck, Sparkles, Users, WandSparkles, X } from "lucide-react";
 import type { ClientRequest, Company, CompanyConfig, ScopeReview, ScopeWorkPackage, WorkspaceResponse } from "../../lib/client-workflow-types";
 import { extractClientFile, type ExtractedUpload } from "../../lib/browser-document-extraction";
+import { configuredProductId } from "../../lib/workflow-product-selection";
 
 import { AuditPanel, ConnectorsPanel, DeliveryPanel, EvaluationPanel, MembersPanel } from "./governance";
 import { button, secondary, input, label, card, Section } from "./ui";
@@ -24,6 +25,11 @@ const typeLabel: Record<string, string> = { demo: "Demo inquiry", setup: "Produc
 type UploadItem = { file: File; result?: ExtractedUpload; error?: string };
 
 function Field({ name, children }: { name: string; children: ReactNode }) { return <label className={label}>{name}{children}</label>; }
+function reviewForEditor(request: ClientRequest, products: CompanyConfig["products"]): ScopeReview {
+  const review = structuredClone(request.review);
+  if (request.status !== "frozen") review.productId = configuredProductId(review.productId, products);
+  return review;
+}
 
 async function api(body?: Record<string, unknown> | FormData, companyId?: string): Promise<WorkspaceResponse> {
   const url = companyId ? `/api/company-workspace?company=${encodeURIComponent(companyId)}` : "/api/company-workspace";
@@ -79,10 +85,10 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
   useEffect(() => {
     const timer = window.setTimeout(() => {
       if (!request) { setReview(null); return; }
-      setReview(structuredClone(request.review)); setEditing(false);
+      setReview(reviewForEditor(request, company?.config.products ?? [])); setEditing(false);
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [request]);
+  }, [request, company?.config.products]);
 
   async function run(name: string, work: () => Promise<WorkspaceResponse>) {
     setBusy(name); setError(""); setNotice("");
@@ -204,7 +210,7 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
                 <Field name="Deliverables"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.deliverables} onChange={event => setReview(current => current && ({ ...current, deliverables: event.target.value, confirmed: false }))} /></Field><Field name="Exclusions"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.exclusions} onChange={event => setReview(current => current && ({ ...current, exclusions: event.target.value, confirmed: false }))} /></Field><Field name="Acceptance criteria"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.acceptance} onChange={event => setReview(current => current && ({ ...current, acceptance: event.target.value, confirmed: false }))} /></Field><Field name="Dependencies and owners"><textarea className={input} rows={4} disabled={!editing || request.status === "frozen"} value={review.dependencies} onChange={event => setReview(current => current && ({ ...current, dependencies: event.target.value, confirmed: false }))} /></Field></div>
               <div className="mt-5"><h3 className="text-sm font-semibold">Work packages</h3><div className="mt-3 space-y-3">{review.workPackages.map((item,index)=><WorkPackageEditor key={item.id} item={item} index={index} templates={company.config.tasks} disabled={!editing || request.status === "frozen"} onChange={next => setReview(current => current && ({ ...current, workPackages: current.workPackages.map((packageItem,i)=>i===index?next:packageItem), confirmed:false }))} onRemove={() => setReview(current => current && ({ ...current, workPackages: current.workPackages.filter((_,i)=>i!==index), confirmed:false }))} />)}</div>{editing && <button className={secondary + " mt-3"} type="button" onClick={() => { const template=company.config.tasks[0]; if (!template) return; const item: ScopeWorkPackage={id:crypto.randomUUID(),taskId:template.id,title:template.label,quantity:1,complexity:"medium",owner:"company",acceptance:"",dependencies:""}; setReview(current=>current&&({...current,workPackages:[...current.workPackages,item],confirmed:false})); }}><Plus size={14} />Add work package</button>}</div>
               {review.questions.length > 0 && <div className="mt-5 rounded-xl bg-amber-50 p-4"><h3 className="text-sm font-semibold text-amber-950">Open questions</h3><ul className="mt-2 list-inside list-disc text-sm text-amber-900">{review.questions.map((item,index)=><li key={index}>{item}</li>)}</ul></div>}
-              <div className="mt-5 flex flex-wrap items-center gap-2">{editing ? <><button className={button} disabled={!canEstimate || !!busy || !unsavedScope} onClick={() => void action({ action:"saveReview",requestId:request.id,expectedVersion:request.version,review },"Scope changes saved. Confirm them before estimating.")}><Check size={15} />Save scope changes</button><button className={secondary} onClick={() => { setReview(structuredClone(request.review)); setEditing(false); }}>Cancel</button></> : <button className={secondary} disabled={!canEstimate || request.status === "frozen" || !!busy} onClick={() => setEditing(true)}>Edit reviewed scope</button>}
+              <div className="mt-5 flex flex-wrap items-center gap-2">{editing ? <><button className={button} disabled={!canEstimate || !!busy || !unsavedScope} onClick={() => void action({ action:"saveReview",requestId:request.id,expectedVersion:request.version,review },"Scope changes saved. Confirm them before estimating.")}><Check size={15} />Save scope changes</button><button className={secondary} onClick={() => { setReview(reviewForEditor(request, company.config.products)); setEditing(false); }}>Cancel</button></> : <button className={secondary} disabled={!canEstimate || request.status === "frozen" || !!busy} onClick={() => setEditing(true)}>Edit reviewed scope</button>}
                 {!review.confirmed && request.status !== "frozen" && <button className={button} disabled={!canEstimate || !!busy || editing || !review.deliverables.trim()} onClick={() => void action({ action:"confirmScope",requestId:request.id,expectedVersion:request.version,confirmed:true },"Scope confirmed. You can now calculate effort.")}><ShieldCheck size={15} />Confirm scope</button>}
                 {review.confirmed && request.status !== "frozen" && <p className="inline-flex items-center gap-2 text-sm text-green-800"><CheckCircle2 size={16} />Scope confirmed by {review.confirmedBy}</p>}
               </div>

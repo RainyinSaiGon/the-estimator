@@ -1,6 +1,7 @@
 import { and, desc, eq, inArray } from "drizzle-orm";
 import { z } from "zod";
 import { env } from "cloudflare:workers";
+import { configuredProductId } from "./workflow-product-selection";
 import { getDb } from "../db";
 import { workflowCompanies, workflowRequests } from "../db/schema";
 import { aiConfig } from "./brief-ai";
@@ -211,7 +212,7 @@ async function runAI(text: string, company: Company): Promise<ClientAnalysis> {
   });
   const packages = raw.workPackages.filter(item => taskIds.includes(item.taskId)).slice(0, 20).map(item => ({ ...item, id: crypto.randomUUID(), quantity: Math.max(0.1, Math.min(100, Number.isFinite(item.quantity) ? item.quantity : 1)) }));
   return {
-    ...raw, facts, capabilityFindings, productFindings, workPackages: packages,
+    ...raw, productId: configuredProductId(raw.productId, products), facts, capabilityFindings, productFindings, workPackages: packages,
     questions: raw.questions.slice(0, 20), assumptions: raw.assumptions.slice(0, 20), conflicts: raw.conflicts.slice(0, 20),
     run: { model, elapsedMs: Date.now() - started, steps: ["request classification", "source-backed fact extraction", "approved knowledge lookup", "capability and product fit", "gaps and risk review"] },
   };

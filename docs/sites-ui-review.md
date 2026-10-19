@@ -41,7 +41,11 @@ requests. It does not establish recorded delivery performance.
 Review desktop and phone layouts with browser screenshots and check document
 scroll width against viewport width. Check intermediate widths for the request
 editor and template fields. These checks supplement the type check, production
-build, existing 24 estimator/evaluation tests and compiled Worker workflow QA.
+build, 27 estimator/evaluation/product-selection tests and compiled Worker workflow QA.
+
+AI product selections are restricted to the configured catalog. Unknown or
+retired IDs display and submit the same empty selection in editable drafts;
+immutable frozen snapshots retain their original value.
 
 Independent reviewer approval, tenant boundaries, credential revocation and
 signed webhook behavior are exercised with separate fictional actors in the
