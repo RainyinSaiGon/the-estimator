@@ -58,30 +58,30 @@ python services/brief-intelligence/main.py
 
 ```powershell
 npm ci
-npm run dev
+npm run dev:preview
 ```
 
-The root `dev`, `build`, and `start` commands use the Next.js app in `apps/web`.
+The service preview commands are `dev:preview`, `build:preview`, and `start:preview`; they use the Next.js app in `apps/web`. The older root `dev`, `build`, and `start` commands remain compatibility aliases for the same preview.
 
 ## Existing Sites app
 
-The Sites app and its D1 storage remain separate from the new preview. To run its local worker:
+The Sites app and its D1 storage remain separate from the service preview. To build and run its local worker:
 
 ```powershell
-npm run build:legacy
+npm run build:sites
 node --import ./scripts/sites-env.mjs ./node_modules/wrangler/bin/wrangler.js d1 execute DB --local --config dist/server/wrangler.json --persist-to .wrangler/state --file drizzle/0000_mean_jubilee.sql
-npm run dev:legacy
+npm run dev:sites
 ```
 
-Apply the initial migration once per new local legacy database. Future schema changes use `npm run db:generate` and only the new migration files. Local data is stored in ignored `.wrangler/state`; production storage is separate. The legacy worker opens at `http://127.0.0.1:5173`. `npm run start:legacy` serves a previously built worker.
+Apply the initial migration once per new local Sites database. Future schema changes use `npm run db:generate` and only the new migration files. Local data is stored in ignored `.wrangler/state`; production storage is separate. The Sites worker opens at `http://127.0.0.1:5173`. `npm run start:sites` serves a previously built worker. The old `*:legacy` commands remain compatibility aliases for these Sites commands.
 
 ## Validation
 
 ```powershell
 npm test
 npm run typecheck
-npm run build
-npm run build:legacy
+npm run build:preview
+npm run build:sites
 npm run check:secrets
 ```
 

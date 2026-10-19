@@ -10,7 +10,7 @@ The demo actor can create, edit, analyze, review, estimate, freeze, track and ev
 
 ## Release path
 
-The **Sites release artifact** GitHub Actions workflow runs for pull requests and pushes to `main`. It checks types, evaluation invariants, and the compiled Worker against isolated local D1/R2. It builds the Cloudflare application with `npm run build:legacy` and uploads `sites-release-<commit>` with its GitHub commit and Git tree recorded in the archive. No production credential is available to CI.
+The **Sites release artifact** GitHub Actions workflow runs for pull requests and pushes to `main`. It checks types, evaluation invariants, and the compiled Worker against isolated local D1/R2. It builds the deployed Sites application with `npm run build:sites` and uploads `sites-release-<commit>` with its GitHub commit and Git tree recorded in the archive. No production credential is available to CI.
 
 After merging and successful CI, use the existing Sites source checkout and its short-lived source credential. Run `scripts/stage-sites-github-release.mjs <verified-main-sha>` from that clean checkout to stage the entire GitHub tree. Extract the matching Actions artifact there. The Sites source helper commits/pushes that tree and packages the checked build; save and publish it with the native Sites tools. Check deployment completion and `/release.json` against the merged GitHub commit. Do not copy individual application files between the repositories or rebuild a different revision.
 
