@@ -2,7 +2,7 @@ import { applyAction, ClientWorkflowError, ensureClientWorkflowSchema, getWorksp
 import { requireCompanyRole } from "../../../../lib/workflow-governance";
 import { fetchApprovedKnowledgeSource, KnowledgeFetchError } from "../../../../lib/workflow-knowledge-fetch";
 import { ensureWorkflowKnowledgeSchema, normalizeKnowledgeDomains, readKnowledgeFetchMetadata, readKnowledgePolicy, saveKnowledgeFetchMetadata, updateKnowledgePolicy } from "../../../../lib/workflow-knowledge-store";
-import { getChatGPTUser } from "../../../chatgpt-auth";
+import { companyWorkspaceAccess } from "../../../../lib/company-workspace-access";
 
 export const dynamic = "force-dynamic";
 
@@ -19,8 +19,9 @@ function errorResponse(error: unknown) {
 }
 
 export async function GET(request: Request) {
-  const user = await getChatGPTUser();
-  if (!user) return Response.json({ error: "Sign in to manage company knowledge." }, { status: 401 });
+  const access = await companyWorkspaceAccess();
+  if (!access) return Response.json({ error: "Sign in to manage company knowledge." }, { status: 401 });
+  const { user } = access;
   try {
     await ensureClientWorkflowSchema();
     await ensureWorkflowKnowledgeSchema();
@@ -86,8 +87,9 @@ async function readActionBody(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const user = await getChatGPTUser();
-  if (!user) return rejectPost(request, "Sign in before changing company knowledge.", 401);
+  const access = await companyWorkspaceAccess();
+  if (!access) return rejectPost(request, "Sign in before changing company knowledge.", 401);
+  const { user } = access;
   const origin = request.headers.get("origin");
   if (!origin || origin !== new URL(request.url).origin) return rejectPost(request, "This request must come from your workspace.", 403);
   try {

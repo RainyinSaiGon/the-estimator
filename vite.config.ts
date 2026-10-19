@@ -37,7 +37,8 @@ const localBindingConfig = {
 };
 
 export default defineConfig(async ({ command, mode }) => {
-  const localEnv = command === "serve" ? loadEnv(mode, process.cwd(), "") : {};
+  const localEnv = loadEnv(mode, process.cwd(), "");
+  const publicDemoAccess = process.env.PUBLIC_DEMO_ACCESS ?? localEnv.PUBLIC_DEMO_ACCESS ?? "true";
   // Use Miniflare's local Request.cf placeholder unless fetching is requested.
   process.env.CLOUDFLARE_CF_FETCH_ENABLED ??= "false";
   process.env.WRANGLER_SEND_METRICS ??= "false";
@@ -63,14 +64,17 @@ export default defineConfig(async ({ command, mode }) => {
     },
     plugins: [
       vinext(),
-      sites({ mockAuth: !managedLinux }),
+      sites({ mockAuth: !managedLinux && publicDemoAccess !== "true" }),
       connectorPreview(),
       cloudflare({
         viteEnvironment: { name: "rsc", childEnvironments: ["ssr"] },
         inspectorPort: false,
         config: {
           ...localBindingConfig,
-          ...(command === "serve" && localEnv.OPENAI_API_KEY ? { vars: { OPENAI_API_KEY: localEnv.OPENAI_API_KEY, OPENAI_MODEL: localEnv.OPENAI_MODEL || "gpt-5.4-mini" } } : {}),
+          vars: {
+            PUBLIC_DEMO_ACCESS: publicDemoAccess,
+            ...(command === "serve" && localEnv.OPENAI_API_KEY ? { OPENAI_API_KEY: localEnv.OPENAI_API_KEY, OPENAI_MODEL: localEnv.OPENAI_MODEL || "gpt-5.4-mini" } : {}),
+          },
           ...(command === "serve"
             ? {
                 services: [
