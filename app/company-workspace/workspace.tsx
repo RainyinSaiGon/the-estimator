@@ -75,9 +75,9 @@ async function api(body?: Record<string, unknown> | FormData, companyId?: string
   return data;
 }
 
-function Progress({ request }: { request: ClientRequest }) {
+function Progress({ request, needsReview }: { request: ClientRequest; needsReview: boolean }) {
   const steps = ["Brief & AI analysis", "Review scope", "Calculate effort", "Commit & track"];
-  const current = request.status === "received" || request.status === "analyzing" || request.status === "analysis_failed" ? 1 : request.status === "needs_review" ? 2 : request.status === "scope_confirmed" || request.status === "estimated" ? 3 : 4;
+  const current = request.status === "frozen" ? 4 : !request.analysis || request.status === "analyzing" || request.status === "analysis_failed" ? 1 : needsReview || !request.review.confirmed ? 2 : request.estimate ? 4 : 3;
   return <div aria-label="Request progress" className="rounded-xl border border-estimator-line bg-estimator-canvas/70 p-4">
     <div className="mb-3 flex flex-wrap items-center justify-between gap-2"><p className="text-xs font-semibold uppercase tracking-wide text-estimator-muted">Workflow progress</p><p className="text-xs font-medium text-estimator-ink">Step {current} of {steps.length} · {steps[current - 1]}</p></div>
     <ol className="grid grid-cols-2 gap-x-3 gap-y-3 sm:grid-cols-4">{steps.map((step, index) => <li key={step} aria-current={index + 1 === current ? "step" : undefined} className="min-w-0"><div className={`mb-2 h-1.5 rounded-full ${index + 1 < current ? "bg-estimator-ink" : index + 1 === current ? "bg-estimator-accent" : "bg-estimator-line"}`} /><span className={`text-[10px] leading-4 sm:text-xs ${index + 1 <= current ? "font-medium text-estimator-ink" : "text-estimator-muted"}`}>{step}</span></li>)}</ol>
@@ -94,6 +94,8 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
   const [companyId, setCompanyId] = useState("");
   const [requestId, setRequestId] = useState("");
   const [requestView, setRequestView] = useState<"list" | "detail">("list");
+  const requestFocus = useRef<{ id: string; section: string } | null>(null);
+  const [requestOpenSequence, setRequestOpenSequence] = useState(0);
   const [requestQuery, setRequestQuery] = useState("");
   const [creatingCompany, setCreatingCompany] = useState(false);
   const [creatingRequest, setCreatingRequest] = useState(false);
@@ -175,13 +177,35 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
     }
   }, []);
   useEffect(() => {
+    const focus = requestFocus.current;
     const timer = window.setTimeout(() => {
       if (!request) { setReview(null); setReviewerQuestion(""); return; }
-      setReview(reviewForEditor(request, company?.config.products ?? [])); setEditing(false);
+      setReview(reviewForEditor(request, company?.config.products ?? []));
+      setEditing(focus?.id === request.id && focus.section === "scope" && canEstimate && request.status !== "frozen");
       setReviewerQuestion("");
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [request, company?.config.products]);
+  }, [request, company?.config.products, requestOpenSequence, canEstimate]);
+
+  useEffect(() => {
+    const target = requestFocus.current;
+    if (!target || target.id !== request?.id || panel !== "requests" || requestView !== "detail" || !review) return;
+    const frame = window.requestAnimationFrame(() => {
+      const section = document.getElementById(`request-${target.section}`);
+      if (section) {
+        section.focus({ preventScroll: true });
+        section.scrollIntoView({ block: "start" });
+        requestFocus.current = null;
+      }
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [panel, requestView, request, review, requestOpenSequence]);
+
+  function openRequest(id: string, action?: string) {
+    requestFocus.current = { id, section: action === "Review scope" ? "scope" : action === "Calculate effort" || action === "Commit plan" ? "effort" : action === "Open a committed plan" ? "tracking" : "analysis" };
+    setRequestOpenSequence(current => current + 1);
+    setPanel("requests"); setRequestId(id); setRequestView("detail"); setCreatingRequest(false);
+  }
 
   async function run(name: string, work: () => Promise<WorkspaceResponse>) {
     setBusy(name); setError(""); setNotice("");
@@ -307,21 +331,8 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
         <span aria-hidden="true" className="grid size-9 shrink-0 place-items-center rounded-xl bg-estimator-ink text-white"><Layers3 size={18} /></span>
         <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 break-words text-lg font-semibold leading-tight tracking-tight sm:text-xl">{company?.name ?? "AI request workspace"}</h1></div>
       </div>
-      <p className="max-w-40 truncate text-xs text-estimator-muted sm:max-w-none">{publicDemo ? "Interactive demo" : userName}</p>
+      {!publicDemo && <p className="max-w-40 truncate text-xs text-estimator-muted sm:max-w-none">{userName}</p>}
     </header>
-      {publicDemo && <aside role="note" className="mb-5 rounded-xl border border-estimator-line bg-estimator-paper px-4 py-3 text-xs leading-5 text-estimator-muted"><strong className="font-semibold text-estimator-ink">Interactive demo · live AI.</strong> This workspace is shared. Use fictional client material; demo requests stay separate from real delivery results.
-      <details className="mt-1 text-xs">
-        <summary className="cursor-pointer font-medium underline underline-offset-2">How to try the demo</summary>
-        <ol className="mt-3 grid gap-x-6 gap-y-2 pl-5 text-xs leading-5 sm:grid-cols-2">
-          <li><strong>Receive:</strong> open the fictional CRM migration request below, or create another fictional request. Live AI analysis uses the configured OpenAI service.</li>
-          <li><strong>Review:</strong> inspect cited source evidence, findings, assumptions, product fit, and open questions. Correct the scope before continuing.</li>
-          <li><strong>Estimate:</strong> confirm the reviewed scope to calculate task-by-task effort ranges, then commit the approved plan.</li>
-          <li><strong>Track:</strong> open a frozen request to set task owners, statuses, dates, milestones and blockers. Actuals still need evidence and a different reviewer; the shared demo cannot stand in for that reviewer.</li>
-          <li><strong>Evaluate:</strong> see AI analysis, human review decisions and next actions. Delivery results become available after independent review.</li>
-          <li><strong>Connect:</strong> open Workspace settings → Integrations to rotate demo webhook credentials or create a read-only MCP token. These credentials are shared-demo only.</li>
-        </ol>
-      </details>
-    </aside>}
     <div id="company-content" tabIndex={-1} className={`min-w-0 flex-1 ${!company ? "flex flex-col" : ""}`}>
     {error && <div role="alert" className="mb-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">{error}</div>}
     {notice && <div role="status" className="mb-5 rounded-xl bg-green-50 p-4 text-sm text-green-900">{notice}</div>}
@@ -368,8 +379,8 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
         {requestView === "detail" && <div className="min-w-0 space-y-5">
           {creatingRequest && <Section title="Add a client brief" description={publicDemo ? "Paste a fictional brief or attach sample documents. Live AI extracts evidence and drafts a scope for you to review before calculating effort." : "Paste the brief or attach source files. AI extracts evidence and drafts a scope; your team reviews it before the estimator calculates effort."}><form className="space-y-4" onSubmit={createRequest}><Field name="Brief title"><input className={input} value={title} required minLength={3} maxLength={200} onChange={event => setTitle(event.target.value)} placeholder="e.g. Investor onboarding and data migration" /></Field>{!publicDemo ? <Field name="Evidence cohort"><select className={input} value={cohort} onChange={event => setCohort(event.target.value as "synthetic" | "recorded")}><option value="synthetic">Synthetic / test request</option><option value="recorded">Recorded client request</option></select><span className="mt-1 block">This classification is frozen before actuals and cannot be changed afterward.</span></Field> : <div className="rounded-xl border border-estimator-line bg-estimator-paper p-3"><p className="text-sm font-medium">Synthetic demo request</p><p className="mt-1 text-xs leading-5 text-estimator-muted">Requests from this shared workspace are always marked synthetic and excluded from real delivery training.</p></div>}<Field name="Client brief"><textarea className={input} rows={8} value={text} maxLength={20000} onChange={event => setText(event.target.value)} placeholder="Paste the request email, form submission, or project brief…" /></Field><Field name="Add documents · PDF, Word, Excel, CSV, text, JSON, or email"><input className={input} type="file" multiple accept=".pdf,.docx,.xlsx,.csv,.txt,.md,.json,.eml" disabled={processingUploads || !!busy} onChange={event => { void chooseFiles(event.currentTarget.files); event.currentTarget.value = ""; }} /></Field>{processingUploads && <p role="status" className="flex items-center gap-2 text-sm text-[var(--muted)]"><Loader2 size={15} className="animate-spin" />Reading file text and sheet or page references…</p>}{uploads.length > 0 && <ul className="space-y-2">{uploads.map((item,index)=><li key={`${item.file.name}-${index}`} className="flex flex-wrap items-start justify-between gap-3 rounded-xl border border-[var(--line)] p-3"><div className="min-w-0"><p className="break-all text-sm font-medium">{item.file.name} <span className="font-normal text-[var(--muted)]">({(item.file.size/1024).toFixed(0)} KB)</span></p>{item.error ? <p className="mt-1 text-xs text-red-800">{item.error}</p> : item.result && <p className="mt-1 text-xs leading-5 text-[var(--muted)]">{item.result.status.replaceAll("_", " ")} · {item.result.text.length.toLocaleString()} characters · {item.result.locators.length} references{item.result.truncated ? " · text shortened to 40,000 characters" : ""}{item.result.message ? ` · ${item.result.message}` : ""}</p>}</div><button type="button" className="rounded-full p-1 text-[var(--muted)] hover:bg-[var(--paper)]" aria-label={`Remove ${item.file.name}`} onClick={() => setUploads(current => current.filter((_,i)=>i!==index))}><X size={15}/></button></li>)}</ul>}<p className="rounded-xl bg-[var(--paper)] p-3 text-xs leading-5 text-[var(--muted)]">PDF, DOCX, XLSX, CSV, TXT, Markdown, JSON, and EML · 10 MB each, 20 MB total, 10 files. Extracted page or sheet references are shown with findings. Image-only PDFs need OCR, which this version does not provide. {publicDemo ? "Files are visible to every visitor to this shared demo workspace; use fictional documents only." : "Original files are stored in private company storage and deleted when you delete the request."} Request content and extracted text go to the configured AI provider; no numeric effort is generated by AI.</p><button className={button} disabled={!!busy || processingUploads || uploads.some(item=>!!item.error||!item.result) || !data?.aiReady || (text.trim().length < 30 && uploads.length === 0)}><WandSparkles size={16} />Analyze brief</button>{!data?.aiReady && <p className="text-sm text-amber-800">Configure the server-side OpenAI key to analyze requests. Your text and files are not saved until analysis can start.</p>}</form></Section>}
           {request && review && <>
-            <Section title={request.title} description={`${typeLabel[request.analysis?.requestType ?? request.review.requestType] ?? "Client request"} · received ${new Date(request.createdAt).toLocaleString()}`}>
-              <Progress request={request} />
+            <Section id="request-analysis" title={request.title} description={`${typeLabel[request.analysis?.requestType ?? request.review.requestType] ?? "Client request"} · received ${new Date(request.createdAt).toLocaleString()}`}>
+              <Progress request={request} needsReview={reviewBlockers.length > 0 || !review.confirmed || editing} />
               {request.analysisError && <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 p-3 text-sm text-red-900"><p>{request.analysisError}</p><button className="mt-2 font-medium underline" disabled={!!busy} onClick={() => void action({ action: "analyze", requestId: request.id, expectedVersion: request.version }, "AI analysis completed. Review its findings.")}>Retry AI analysis</button></div>}
               {request.analysis && <div className="mt-5 grid gap-4 md:grid-cols-2"><div className="rounded-xl bg-[var(--paper)] p-4 md:col-span-2"><p className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">AI draft · review before committing</p><p className="mt-2 text-sm leading-6">{request.analysis.summary}</p><details className="mt-3 text-xs text-estimator-muted"><summary className="cursor-pointer">Analysis details</summary><p className="mt-2 leading-6">{steps.join(" · ")} · {request.analysis.run.model} · {(request.analysis.run.elapsedMs / 1000).toFixed(1)}s</p></details></div>
                 <div className="md:col-span-2"><ProposedWorkPackages workPackages={review.workPackages} templates={company.config.tasks} editing={editing} disabled={!canEstimate || request.status === "frozen"} onEdit={() => setEditing(true)} onChange={(index, next) => setReview(current => current && ({ ...current, workPackages: current.workPackages.map((item, itemIndex) => itemIndex === index ? next : item), confirmed: false }))} onRemove={index => setReview(current => current && ({ ...current, workPackages: current.workPackages.filter((_, itemIndex) => itemIndex !== index), confirmed: false }))} onAdd={() => { const template = company.config.tasks[0]; if (!template) return; const item: ScopeWorkPackage = { id: crypto.randomUUID(), taskId: template.id, title: template.label, quantity: 1, complexity: "medium", owner: "company", acceptance: "", dependencies: "", rationale: "Added by reviewer.", evidence: "", evidenceSource: "Reviewer-added" }; setReview(current => current && ({ ...current, workPackages: [...current.workPackages, item], confirmed: false })); }} /></div>
@@ -380,7 +391,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
               </div>}
             </Section>
 
-            {request.analysis && <Section title="Human scope review" description="Correct deliverables, exclusions, acceptance, dependencies and task packages. Saving edits clears the previous scope confirmation.">
+            {request.analysis && <Section id="request-scope" title="Human scope review" description="Correct deliverables, exclusions, acceptance, dependencies and task packages. Saving edits clears the previous scope confirmation.">
               <div className="mb-5 rounded-xl border border-amber-200 bg-amber-50/70 p-4">
                 <h3 className="text-sm font-semibold text-amber-950">Resolve analysis questions</h3>
                 <p className="mt-1 text-xs leading-5 text-amber-950">Every AI question and any reviewer-added question needs an answer or a reason it does not apply before scope confirmation.</p>
@@ -404,7 +415,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
             </Section>}
 
             {review.confirmed && request.status !== "frozen" && reviewBlockers.length > 0 && <Section title="Review required before estimating" description="This scope was confirmed before the current review checks. Reopen it to resolve every question and AI finding and make completion prerequisites explicit."><ul className="list-inside list-disc space-y-1 text-sm text-amber-950">{reviewBlockers.map(item=><li key={item}>{item}</li>)}</ul><button className={secondary + " mt-4"} disabled={!canEstimate || !!busy} onClick={() => setEditing(true)}>Reopen scope review</button></Section>}
-            {review.confirmed && request.status !== "frozen" && reviewBlockers.length === 0 && <Section title="Explainable effort plan" description="Effort is calculated from configured task templates and reviewer-selected complexity. It is a planning range, not a calibrated prediction or calendar promise.">
+            {review.confirmed && request.status !== "frozen" && reviewBlockers.length === 0 && <Section id="request-effort" title="Explainable effort plan" description="Effort is calculated from configured task templates and reviewer-selected complexity. It is a planning range, not a calibrated prediction or calendar promise.">
               {!request.estimate ? <button className={button} disabled={!canEstimate || !!busy || !review.workPackages.length} onClick={() => void action({ action:"estimate",requestId:request.id,expectedVersion:request.version },"Effort range calculated from the current task configuration.")}><Sparkles size={15} />Calculate effort</button> : <><EstimateTable estimate={request.estimate} /><button className={button + " mt-4"} disabled={!canEstimate || !!busy} onClick={() => void action({ action:"freeze",requestId:request.id,expectedVersion:request.version },"Plan committed. Track delivery against the approved scope and effort.")}><ShieldCheck size={15} />Commit plan</button></>}
             </Section>}
             {request.baselines.length > 0 && <Section title="Commitment history" description="Each approved plan keeps the scope, effort estimate and company settings used when you committed.">{request.baselines.map(base=><details key={base.id} className="mb-3 rounded-xl bg-[var(--paper)] p-4"><summary className="flex cursor-pointer flex-wrap items-center justify-between gap-2"><strong>Committed plan {base.revision}</strong><span className="text-xs text-estimator-muted">{new Date(base.createdAt).toLocaleString()}</span></summary><div className="mt-4"><EstimateTable estimate={base.estimate}/></div><details className="mt-4 text-xs text-estimator-muted"><summary className="cursor-pointer">Plan audit details</summary><p className="mt-2">Settings revision {base.configVersion}</p><p className="mt-2 break-all font-mono">SHA-256 {base.sha256}</p></details></details>)}</Section>}
@@ -427,7 +438,7 @@ export default function CompanyWorkspace({ userName, guest = false, publicDemo =
       {panel === "members" && <MembersPanel company={company} actorId={data!.actorId} publicDemo={publicDemo} busy={!!busy} action={body => action(body,"Organization access updated.")}/>}
       {panel === "connectors" && <ConnectorsPanel company={company} publicDemo={publicDemo} busy={!!busy} action={body => action(body,"Connector settings updated.")}/>}
       {panel === "audit" && <AuditPanel company={company} publicDemo={publicDemo}/>}
-      {panel === "evaluation" && <EvaluationPanel company={company} publicDemo={publicDemo} onOpenRequests={() => { setPanel("requests"); setRequestView("list"); setCreatingRequest(false); }} onOpenRequest={id => { setPanel("requests"); setRequestId(id); setRequestView("detail"); setCreatingRequest(false); }}/>}
+      {panel === "evaluation" && <EvaluationPanel company={company} publicDemo={publicDemo} onOpenRequests={() => { setPanel("requests"); setRequestView("list"); setCreatingRequest(false); }} onOpenRequest={openRequest}/>}
     </>}
     </div>
     <footer className="mt-10 flex flex-wrap items-center justify-between gap-4 border-t border-estimator-line py-5 text-xs leading-6 text-estimator-muted"><p className="max-w-2xl">Source-backed scope. Human review. Explainable effort.</p><span>The Estimator · {publicDemo ? "Shared public demo workspace" : "Private company workspace"}</span></footer>
@@ -460,7 +471,7 @@ function CommitmentTrackingPanel({ request, members, busy, canEdit, onSave }: { 
     const saved = await onSave({ action: "saveTracking", requestId: request.id, expectedVersion: request.version, taskTracking: tasks, ...(scopeChangeOpen ? { scopeChange } : {}) }, "Commitment tracking saved against the frozen baseline.");
     if (saved && scopeChangeOpen) { setScopeChange({ description: "", reason: "", effortImpact: "" }); setScopeChangeOpen(false); }
   }
-  return <Section title="Commitment & tracking" description="The approved baseline stays fixed. Update delivery progress here and record requested scope changes separately.">
+  return <Section id="request-tracking" title="Commitment & tracking" description="The approved baseline stays fixed. Update delivery progress here and record requested scope changes separately.">
     <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4"><Metric label="Committed on" value={new Date(baseline.createdAt).toLocaleDateString()} /><Metric label="Forecast range" value={`${estimate.adjustedLowHours ?? estimate.lowHours}–${estimate.adjustedHighHours ?? estimate.highHours} h`} /><Metric label="Central effort" value={`${estimate.adjustedHours ?? estimate.baseHours} h`} /><Metric label="Estimate basis" value={estimate.calibration === "training-history" ? "Reviewed delivery history" : "Company task templates"} /></div>
     <div className="mb-5 rounded-xl bg-estimator-paper p-3 text-xs leading-5 text-estimator-muted"><p>Set planned dates using your team’s availability, customer response times and vendor dependencies. Effort hours describe work, while dates describe your delivery schedule.</p><details className="mt-2"><summary className="cursor-pointer">Plan audit details</summary><p className="mt-2 break-all font-mono">SHA-256 {baseline.sha256}</p></details></div>
     {!canEdit && <p className="mb-4 rounded-lg bg-estimator-paper p-3 text-xs text-estimator-muted">Your role can view this commitment but cannot change tracking.</p>}
