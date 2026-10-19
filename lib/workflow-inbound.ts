@@ -27,7 +27,33 @@ export async function readBoundedBody(request: Request, limit: number) {
 
 async function extractInbound(bytes: Uint8Array, extension: string) {
   let text = "", locators: string[] = [];
-  if (extension === "docx") {
+  let truncated = false;
+  if (extension === "pdf") {
+    const [pdfjs, worker] = await Promise.all([
+      import("pdfjs-dist/legacy/build/pdf.mjs"),
+      import("pdfjs-dist/legacy/build/pdf.worker.mjs"),
+    ]);
+    (globalThis as typeof globalThis & { pdfjsWorker?: typeof worker }).pdfjsWorker = worker;
+    // PDF.js may transfer its input buffer to the fake worker; keep the R2
+    // upload/hash buffer owned by the webhook handler.
+    const task = pdfjs.getDocument({ data: bytes.slice(), useWorkerFetch: false, disableFontFace: true, maxImageSize: 1024 * 1024 });
+    const document = await task.promise;
+    try {
+      const pageCount = Math.min(document.numPages, 100);
+      const pages: string[] = [];
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
+        const page = await document.getPage(pageNumber);
+        const content = await page.getTextContent();
+        const pageText = content.items.map(item => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").trim();
+        if (pageText) { pages.push(`[Page ${pageNumber}] ${pageText}`); locators.push(`Page ${pageNumber}`); }
+        if (pages.join("\n\n").length >= 40000) { truncated = true; break; }
+      }
+      text = pages.join("\n\n");
+      truncated ||= document.numPages > pageCount;
+    } finally {
+      await task.destroy();
+    }
+  } else if (extension === "docx") {
     const mammoth = await import("mammoth/mammoth.browser");
     const result = await mammoth.extractRawText({ arrayBuffer: bytes.slice().buffer });
     const paragraphs = result.value.split(/\n\s*\n/).filter(Boolean);
@@ -45,7 +71,9 @@ async function extractInbound(bytes: Uint8Array, extension: string) {
       locators = text.split(/\r?\n/).map((_, index) => `Row ${index + 1}`);
     } else locators = ["Document text"];
   }
-  return { text: text.slice(0, 40000), locators: locators.slice(0, 200), truncated: text.length > 40000, status: text.trim() ? "extracted" as const : "needs_attention" as const, ...(!text.trim() ? { message: extension === "pdf" ? "PDF received securely. This webhook adapter cannot extract its pages. Review the original and reconcile its contents in scope review, or submit it through the workspace for page-aware extraction." : "No readable text was extracted. Review the original before confirming scope." } : {}) };
+  const limited = text.slice(0, 40000);
+  const status = limited.trim() ? "extracted" as const : extension === "pdf" ? "ocr_required" as const : "needs_attention" as const;
+  return { text: limited, locators: locators.slice(0, 200), truncated: truncated || text.length > 40000, status, ...(!limited.trim() ? { message: extension === "pdf" ? "No selectable text was found in this PDF. OCR is required for scanned or image-only pages." : "No readable text was extracted. Review the original before confirming scope." } : {}) };
 }
 
 export async function receiveInbound(request: Request, companyId: string) {
@@ -67,6 +95,19 @@ export async function receiveInbound(request: Request, companyId: string) {
   const existing = await workflowDb().prepare("SELECT payload_digest, request_id FROM workflow_inbound WHERE company_id = ? AND submission_id = ?").bind(companyId, input.submissionId).first<{ payload_digest: string; request_id: string }>();
   if (existing) {
     if (existing.payload_digest !== payloadDigest) throw new ClientWorkflowError("This submission ID already exists with different content. Use a new event ID for a revision.", 409);
+    // A sender retry with the same stable event ID can recover a request whose
+    // automatic analysis previously failed, without creating duplicate work.
+    const failed = await workflowDb().prepare("SELECT owner_id, version, status FROM workflow_requests WHERE id = ? AND company_id = ?").bind(existing.request_id, companyId).first<{ owner_id: string; version: number; status: string }>();
+    if (failed?.status === "analysis_failed") {
+      await applyAction(failed.owner_id, "Authorized form webhook retry", { action: "analyze", companyId, requestId: existing.request_id, expectedVersion: failed.version }).catch(error => {
+        // Concurrent sender retries are idempotent; the first one owns the
+        // version transition. Other failures remain visible for manual retry.
+        if (!(error instanceof ClientWorkflowError) || error.status !== 409) throw error;
+      });
+      const refreshed = await workflowDb().prepare("SELECT payload FROM workflow_requests WHERE id = ? AND company_id = ?").bind(existing.request_id, companyId).first<{ payload: string }>();
+      const record = refreshed ? JSON.parse(refreshed.payload) as { status?: string } : undefined;
+      return { requestId: existing.request_id, duplicate: true, retriedAnalysis: true, status: record?.status };
+    }
     return { requestId: existing.request_id, duplicate: true };
   }
   const company = await workflowDb().prepare("SELECT owner_id FROM workflow_companies WHERE id = ?").bind(companyId).first<{ owner_id: string }>();
@@ -91,7 +132,9 @@ export async function receiveInbound(request: Request, companyId: string) {
       const objectKey = `request-files/${encodeURIComponent(company.owner_id)}/${companyId}/${requestId}/${id}`;
       let extraction: Awaited<ReturnType<typeof extractInbound>>;
       try { extraction = await extractInbound(bytes, extension); }
-      catch { extraction = { text: "", locators: [], truncated: false, status: "needs_attention", message: "This attachment could not be extracted. Review the original and reconcile missing content before confirming scope." }; }
+      catch {
+        extraction = { text: "", locators: [], truncated: false, status: "needs_attention", message: "This attachment could not be extracted. Review the original and reconcile missing content before confirming scope." };
+      }
       await bucket!.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: company.owner_id, companyId, requestId, fileId: id, sha256 } });
       storedKeys.push(objectKey);
       attachments.push({ id, objectKey, name, type: extension, size: bytes.length, sha256, ...extraction });

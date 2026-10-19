@@ -20,6 +20,14 @@ const knowledge = [{ id: sourceId, title: "FICTIONAL approved guide", text: "Fic
 const review = { requestType: "migration", productId: "", deliverables: "One-time contact migration", exclusions: "Continuous synchronization", acceptance: "Reconciled record counts", dependencies: "Customer supplies export", questions: [], workPackages: [{ id: taskId, taskId: "implementation", title: "One-time contact migration", quantity: 1, complexity: "medium", owner: "company", acceptance: "Counts match", dependencies: "CSV ready" }], confirmed: false, confirmedBy: "", domain: "migration", fieldAnswers: {} };
 const fixture = { id: requestId, title: "FICTIONAL runtime evaluation fixture", text: "Synthetic request, never recorded delivery evidence.", channel: "manual", cohort: "synthetic", createdBy: "qa-owner", createdAt: at, updatedAt: at, status: "needs_review", version: 1, attachments: [], analysis: { summary: "Synthetic analysis fixture; no model claim", requestType: "migration", productId: "", facts: [], capabilityFindings: [], productFindings: [], assumptions: [], conflicts: [], questions: [], deliverables: review.deliverables, exclusions: review.exclusions, acceptance: review.acceptance, dependencies: review.dependencies, workPackages: review.workPackages, sourceCheck: "Fictional fixture", run: { model: "fixture", elapsedMs: 0, steps: [] } }, review, baselines: [], delivery: [] };
 const quote = value => "'" + String(value).replaceAll("'", "''") + "'";
+function tinyPdf(text) {
+  const content = `BT /F1 12 Tf 20 80 Td (${text}) Tj ET`;
+  const objects = ["<< /Type /Catalog /Pages 2 0 R >>", "<< /Type /Pages /Kids [3 0 R] /Count 1 >>", "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 144] /Resources << /Font << /F1 5 0 R >> >> /Contents 4 0 R >>", `<< /Length ${Buffer.byteLength(content)} >>\nstream\n${content}\nendstream`, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"];
+  let pdf = "%PDF-1.4\n"; const offsets = [0];
+  for (let index = 0; index < objects.length; index++) { offsets.push(Buffer.byteLength(pdf)); pdf += `${index + 1} 0 obj\n${objects[index]}\nendobj\n`; }
+  const xrefOffset = Buffer.byteLength(pdf); pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets.slice(1).map(offset => `${String(offset).padStart(10, "0")} 00000 n \n`).join("")}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(pdf).toString("base64");
+}
 const migrations = readdirSync("drizzle").filter(name => /^\d+.*\.sql$/.test(name)).sort().map(name => readFileSync(path.join("drizzle", name), "utf8")).join("\n");
 const sql = migrations + `\nINSERT INTO workflow_companies VALUES (${[companyId, "qa-owner", "FICTIONAL QA organization", 1, JSON.stringify({ config, knowledge }), at, at].map(quote).join(",")});\nINSERT INTO workflow_requests VALUES (${[requestId, "qa-owner", companyId, fixture.title, fixture.status, 1, JSON.stringify(fixture), at, at].map(quote).join(",")});\n`;
 const sqlPath = path.join(directory, "seed.sql"); writeFileSync(sqlPath, sql);
@@ -99,15 +107,15 @@ try {
   assert.equal(evaluated.status, 0, evaluated.stderr); const report = JSON.parse(evaluated.stdout); assert.equal(report.holdout.synthetic.count, 1); assert.equal(report.holdout.recorded, undefined);
   const webhook = (await action({ action: "rotateCredential", kind: "webhook" })).issuedCredential.value;
   const inboundUrl = origin + "/api/company-workspace/inbound/" + companyId;
-  const payload = { submissionId: "fictional-event-1", title: "FICTIONAL signed form", text: "Synthetic contact migration request. No real client or outcome is represented.", cohort: "synthetic", attachments: [{ name: "fictional.csv", contentBase64: Buffer.from("field,target\nEmail,email").toString("base64") }] };
+  const payload = { submissionId: "fictional-event-1", title: "FICTIONAL signed form", text: "Synthetic contact migration request. No real client or outcome is represented.", cohort: "synthetic", attachments: [{ name: "fictional.csv", contentBase64: Buffer.from("field,target\nEmail,email").toString("base64") }, { name: "fictional.pdf", contentBase64: tinyPdf("FICTIONAL PDF source page.") }] };
   async function send(input, signatureKey = webhook, expected = 201, timestamp = new Date().toISOString()) {
     const body = JSON.stringify(input), signature = createHmac("sha256", signatureKey).update(timestamp + "." + body).digest("hex");
     const response = await fetch(inboundUrl, { method: "POST", headers: { connection: "close", "content-type": "application/json", "x-workflow-timestamp": timestamp, "x-workflow-signature": signature }, body }); const text = await response.text(); assert.equal(response.status, expected, text); return JSON.parse(text);
   }
-  const received = await send(payload); const replay = await send(payload, webhook, 200); assert.equal(replay.requestId, received.requestId); assert.equal(replay.duplicate, true);
+  const received = await send(payload); const replay = await send(payload, webhook, 200); assert.equal(replay.requestId, received.requestId); assert.equal(replay.duplicate, true); assert.equal(replay.retriedAnalysis, true);
   await send(payload, "invalid-secret", 401); await send(payload, webhook, 401, "2020-01-01T00:00:00.000Z");
   await send({ ...payload, text: payload.text + " Changed." }, webhook, 409);
-  const inbound = (await workspace()).company.requests.find(row => row.id === received.requestId); assert.equal(inbound.channel, "webhook"); assert.equal(inbound.attachments[0].status, "extracted"); assert.equal(inbound.status, "analysis_failed");
+  const inbound = (await workspace()).company.requests.find(row => row.id === received.requestId); assert.equal(inbound.channel, "webhook"); assert.equal(inbound.attachments[0].status, "extracted"); assert.equal(inbound.attachments[1].status, "extracted"); assert.ok(inbound.attachments[1].text.includes("FICTIONAL PDF source page.")); assert.deepEqual(inbound.attachments[1].locators, ["Page 1"]); assert.equal(inbound.status, "analysis_failed");
   const download = `${url}?company=${companyId}&request=${inbound.id}&file=${inbound.attachments[0].id}`;
   assert.equal((await fetch(download)).status, 401); assert.equal((await fetch(download, { headers: headers("qa-stranger") })).status, 404); assert.equal((await fetch(download, { headers: headers("qa-reviewer") })).status, 200);
   await action({ action: "revokeCredential", kind: "webhook" }); await send(payload, webhook, 401);
