@@ -54,7 +54,15 @@ try {
   await action({ action: "saveConfiguration", expectedVersion: 1, config }, "qa-viewer", 403);
   await action({ action: "createRequest", title: "Forbidden viewer request", text: "FICTIONAL request that a viewer cannot create.", cohort: "synthetic" }, "qa-viewer", 403);
   await action({ action: "setMember", userId: "qa-other", displayName: "Other", role: "admin" }, "qa-estimator", 403);
-  const discovery = await mcp({ method: "tools/list" }); assert.equal(discovery.result.tools.length, 3); assert.ok(!JSON.stringify(discovery).includes("FICTIONAL approved guide"));
+  const discovery = await mcp({ method: "tools/list" }); assert.equal(discovery.result.tools.length, 4); assert.ok(!JSON.stringify(discovery).includes("FICTIONAL approved guide"));
+  async function rootMcp(name, args = {}, actor = "qa-owner", status = 200) {
+    const response = await fetch(origin + "/mcp", { method: "POST", headers: { ...headers(actor), accept: "application/json, text/event-stream" }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name, arguments: args } }) });
+    const data = await response.json(); assert.equal(response.status, status, JSON.stringify(data)); return data;
+  }
+  const listed = await rootMcp("company_list"); assert.ok(listed.result.content[0].text.includes(companyId));
+  const rootSearch = await rootMcp("knowledge_search", { companyId, query: "contact" }); assert.ok(rootSearch.result.content[0].text.includes(sourceId));
+  await rootMcp("knowledge_search", { companyId, query: "contact" }, "qa-stranger", 403);
+  await rootMcp("knowledge_search", { query: "contact" }, "qa-owner", 400);
   await mcp({ method: "tools/call", params: { name: "knowledge_search", arguments: { query: "contact" } } }, undefined, companyId, 401);
   const token = (await action({ action: "rotateCredential", kind: "mcp" })).issuedCredential.value;
   const search = await mcp({ method: "tools/call", params: { name: "knowledge_search", arguments: { query: "contact" } } }, token);
