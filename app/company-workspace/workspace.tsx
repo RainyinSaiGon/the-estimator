@@ -266,13 +266,13 @@ export default function CompanyWorkspace({ userName, guest = false }: { userName
 
   return <main id="company-main" className="mx-auto flex min-h-dvh w-full max-w-[1440px] flex-col px-5 py-6 font-sans sm:px-8 lg:px-10">
     <a className="sr-only focus:not-sr-only focus:mb-4 focus:rounded-full focus:bg-estimator-ink focus:px-4 focus:py-3 focus:text-white" href="#company-content">Skip to workspace content</a>
-    <header className="mb-7 flex flex-col gap-5 border-b border-estimator-line pb-5 sm:flex-row sm:items-center sm:justify-between">
+    <header className="mb-7 flex flex-col gap-5 border-b border-estimator-line pb-5 lg:flex-row lg:items-center lg:justify-between">
       <div className="flex min-w-0 items-center gap-3">
         <span aria-hidden="true" className="grid size-11 shrink-0 place-items-center rounded-2xl bg-estimator-signal text-estimator-signal-ink"><Layers3 size={20} /></span>
         <div className="min-w-0"><p className="text-[10px] font-semibold uppercase tracking-[.18em] text-estimator-muted">The Estimator</p><h1 className="mt-1 text-xl font-semibold leading-tight tracking-tight sm:text-2xl">Company workspace</h1></div>
       </div>
-      <div className="grid w-full grid-cols-1 gap-2 sm:w-auto sm:grid-cols-[minmax(180px,260px)_auto_auto] sm:items-center">
-        {data?.companies.length ? <select aria-label="Company workspace" className={input + " mt-0 sm:w-64"} value={companyId} onChange={event => { setRequestId(""); setCompanyId(event.target.value); void load(event.target.value); }}><option value="">Choose a company</option>{data.companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
+      <div className="grid w-full grid-cols-1 gap-2 lg:w-auto lg:grid-cols-[minmax(180px,260px)_auto_auto] lg:items-center">
+        {data?.companies.length ? <select aria-label="Company workspace" className={input + " mt-0 lg:w-64"} value={companyId} onChange={event => { setRequestId(""); setCompanyId(event.target.value); void load(event.target.value); }}><option value="">Choose a company</option>{data.companies.map(item => <option key={item.id} value={item.id}>{item.name}</option>)}</select> : null}
         <span className={`inline-flex min-h-10 items-center justify-center gap-2 rounded-xl px-3 py-2 text-xs font-medium ${data?.aiReady ? "bg-emerald-50 text-emerald-900" : "bg-amber-50 text-amber-950"}`}><span className={`size-2 rounded-full ${data?.aiReady ? "bg-emerald-600" : "bg-amber-500"}`} />{!data ? "Loading workspace" : data.aiReady ? "AI ready" : "AI setup needed"}</span>
         <button className={secondary} onClick={() => setCreatingCompany(value => !value)}><Plus size={16} />{creatingCompany ? "Cancel" : "New company"}</button>
       </div>
