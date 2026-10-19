@@ -11,7 +11,7 @@ Turn incoming client requests and documents into reviewed scope, explainable tas
 3. Review scope and task effort, then freeze the baseline.
 4. Independently review actual delivery and evaluate declared holdouts, keeping synthetic data separate.
 
-The hosted demo runs the existing Sites application. The newer Next.js, Python, and Go service stack is a local preview and has not replaced the hosted runtime. Estimates are planning ranges; synthetic examples do not establish predictive accuracy.
+The hosted [company workspace](https://the-estimator-anduin-vu.zanyloach6.chatgpt.site/company-workspace) supports documents, signed webhooks, MCP knowledge access, organization roles, and independent delivery review. Gmail polling is deferred on Sites. [GitHub release and setup details](docs/sites-release.md) cover the hosted runtime; the Next.js, Python, and Go stack remains a separate deployment target. Estimates are planning ranges; synthetic examples do not establish predictive accuracy.
 
 ## Run the local preview
 

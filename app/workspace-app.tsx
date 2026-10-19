@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useRef, useState, type CSSProperties } from "react";
+import Link from "next/link";
 import { ArrowDownToLine, ArrowRight, ArrowUpRight, Check, CheckCircle2, ChevronRight, CircleHelp, Clock3, FileText, FolderOpen, History as HistoryIcon, Layers3, Loader2, Plus, ShieldCheck, Sparkles, TrendingUp, X } from "lucide-react";
 import { sampleBrief, taskNames } from "../lib/estimator-data";
 import { estimateProject, scopeMatchesBaseline } from "../lib/estimator";
@@ -99,7 +100,7 @@ export default function WorkspaceApp({ guest = false }: { guest?: boolean }) {
     <a className={tw("skip-link")} href="#main-content">Skip to content</a>
     <header className={tw("site-header bg-white")}>
       <button className={tw("brand")} aria-label="The Estimator home" onClick={showHome}><span className={tw("brand-mark bg-estimator-signal text-estimator-signal-ink")}><Layers3 size={21} strokeWidth={2} /></span><span>The Estimator</span></button>
-      <nav className={tw("site-nav")} aria-label="Main navigation"><button aria-current={homePage ? "page" : undefined} onClick={showHome}>Overview</button><button aria-current={!homePage && !historyPage ? "page" : undefined} onClick={showRequests}>Workspace</button><button aria-current={!homePage && historyPage ? "page" : undefined} onClick={showHistory}>Project history</button></nav>
+      <nav className={tw("site-nav")} aria-label="Main navigation"><button aria-current={homePage ? "page" : undefined} onClick={showHome}>Overview</button><button aria-current={!homePage && !historyPage ? "page" : undefined} onClick={showRequests}>Workspace</button><button aria-current={!homePage && historyPage ? "page" : undefined} onClick={showHistory}>Project history</button><Link className="rounded-full px-3 py-2 text-sm font-medium hover:bg-[var(--paper)]" href="/company-workspace">Company workflow</Link></nav>
       <div className={tw("site-actions")}><button className={tw("header-help")} onClick={() => setHelp(true)}>How it works</button><button className={tw("button primary")} onClick={() => openNew()}>New request <Plus size={15} /></button></div>
     </header>
     <aside className={tw("sidebar bg-[#f1f2ec]")}>
