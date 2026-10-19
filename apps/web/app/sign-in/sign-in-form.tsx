@@ -13,9 +13,10 @@ export default function SignInForm({ returnTo }: { returnTo: string }) {
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const formElement = event.currentTarget;
     setBusy(true);
     setError("");
-    const form = new FormData(event.currentTarget);
+    const form = new FormData(formElement);
     const payload = mode === "register"
       ? { email: form.get("email"), displayName: form.get("displayName") }
       : { email: form.get("email"), password: form.get("password") };
@@ -29,7 +30,7 @@ export default function SignInForm({ returnTo }: { returnTo: string }) {
       if (!response.ok) throw new Error(result.error ?? "The account request could not be completed.");
       if (mode === "register") {
         setNotice("If email delivery is enabled, check your inbox for a verification link. You will create your password after opening it. No session is started until then.");
-        event.currentTarget.reset();
+        formElement.reset();
         return;
       }
       window.location.assign(returnTo);

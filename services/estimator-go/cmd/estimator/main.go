@@ -169,6 +169,7 @@ func main() {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ready", "engine": "integration-effort/2.0"})
 	})
 	mux.HandleFunc("GET /v1/records/status", records.handleRecordStatus)
+	mux.HandleFunc("/v1/workflow/", records.handleCompanyWorkflow)
 	mux.HandleFunc("GET /v1/records", records.handleRecords)
 	mux.HandleFunc("POST /v1/records", records.handleRecords)
 	mux.HandleFunc("DELETE /v1/records", records.handleRecords)

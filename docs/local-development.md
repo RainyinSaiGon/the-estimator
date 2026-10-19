@@ -1,5 +1,7 @@
 # Local development
 
+For the AI company workspace, start with the [company workflow guide](company-workflow.md). It uses the identity/private-storage overlays below and opens at `/workspace`. The older `/estimate` service preview retains its sample parser for compatibility.
+
 ## Default service preview
 
 Requires Docker Compose. Copy the example configuration and set the internal BFF-to-Python credential in the ignored `.env.local` file:

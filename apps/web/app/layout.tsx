@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "The Estimator — integration scoping",
-  description: "Review integration scope, effort and assumptions before a commitment.",
+  title: "The Estimator — scope with evidence",
+  description: "Review client requests, company knowledge, scope, and effort before a commitment.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
