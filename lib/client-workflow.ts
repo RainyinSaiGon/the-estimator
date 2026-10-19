@@ -1,5 +1,5 @@
 import { env } from "cloudflare:workers";
-import { and, desc, eq, inArray } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { z } from "zod";
 import { getDb } from "../db";
 import { workflowCompanies, workflowRequests } from "../db/schema";
@@ -11,7 +11,6 @@ import { defaultConfig } from "./workflow-defaults";
 import { ClientWorkflowError } from "./workflow-errors";
 import { declareDeliverySplit, evaluateDeliveries } from "./workflow-evaluation";
 import {
-  accessibleCompanyIds,
   auditStatement,
   companyRole,
   governanceStatements,
@@ -27,6 +26,9 @@ import {
 } from "./workflow-knowledge-store";
 import { makeEstimate, scopeReadinessBlockers } from "./workflow-planning";
 import { actionSchema } from "./workflow-validation";
+import { readCompanyActivity } from "./workflow-activity";
+import { iterateCompanyRequests, readCompanyRequests, readCompanySummaries, readRequestDetail, readRequestInbox, requireReadableCompany } from "./workflow-queries";
+import { normalizeWorkspaceQuery, type WorkspaceQuery } from "./workflow-query-types";
 export { ClientWorkflowError } from "./workflow-errors";
 
 let workflowSchemaReady: Promise<void> | undefined;
@@ -43,6 +45,8 @@ export function ensureClientWorkflowSchema() {
       "CREATE TABLE IF NOT EXISTS workflow_requests (id TEXT PRIMARY KEY NOT NULL, owner_id TEXT NOT NULL, company_id TEXT NOT NULL, title TEXT NOT NULL, status TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, payload TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
       "CREATE INDEX IF NOT EXISTS workflow_requests_owner_company_updated ON workflow_requests (owner_id, company_id, updated_at)",
       "CREATE INDEX IF NOT EXISTS workflow_requests_company_status ON workflow_requests (company_id, status)",
+      "CREATE INDEX IF NOT EXISTS workflow_requests_company_updated_id ON workflow_requests (company_id, updated_at DESC, id DESC)",
+      "CREATE INDEX IF NOT EXISTS workflow_requests_company_id ON workflow_requests (company_id, id)",
       ...governanceStatements,
     ];
     try {
@@ -75,82 +79,55 @@ function parseRequest(row: typeof workflowRequests.$inferSelect): ClientRequest 
   const request = JSON.parse(row.payload) as ClientRequest;
   return { ...request, attachments: request.attachments ?? [] };
 }
-function publicRequest(request: ClientRequest): ClientRequest {
-  const safeRequest = structuredClone(request);
-  for (const attachment of safeRequest.attachments) delete attachment.objectKey;
-  return safeRequest;
-}
 export async function getWorkspace(
   actorId: string,
   companyId?: string,
+  query: WorkspaceQuery = {},
 ): Promise<WorkspaceResponse> {
-  const db = getDb();
-  const ids = await accessibleCompanyIds(actorId);
-  const companies = ids.length
-    ? await db
-        .select()
-        .from(workflowCompanies)
-        .where(inArray(workflowCompanies.id, ids))
-        .orderBy(desc(workflowCompanies.updatedAt))
-        .limit(50)
-    : [];
-  const selected = companyId ? companies.find((row) => row.id === companyId) : companies[0];
-  const requests = selected
-    ? await db
-        .select()
-        .from(workflowRequests)
-        .where(eq(workflowRequests.companyId, selected.id))
-        .orderBy(desc(workflowRequests.updatedAt))
-        .limit(200)
-    : [];
-  const roles = await Promise.all(companies.map((row) => companyRole(row.id, actorId)));
-  const summary = await Promise.all(
-    companies.map(async (row, index) => ({
-      id: row.id,
-      name: row.name,
-      version: row.version,
-      role: roles[index]!,
-      requestCount:
-        (
-          await workflowDb()
-            .prepare("SELECT COUNT(*) AS n FROM workflow_requests WHERE company_id = ?")
-            .bind(row.id)
-            .first<{ n: number }>()
-        )?.n ?? 0,
-    })),
-  );
-  const publicRequests = requests.map(parseRequest).map(publicRequest);
-  const knowledgeMetadata = selected
-    ? (await ensureWorkflowKnowledgeSchema(), await readKnowledgeFetchMetadata(selected.id))
-    : {};
+  const summary = await readCompanySummaries(actorId);
+  const selectedId = companyId ?? summary[0]?.id;
+  if (companyId && !summary.some(row => row.id === companyId))
+    throw new ClientWorkflowError("Company workspace not found.", 404);
+  const [selected] = selectedId ? await getDb().select().from(workflowCompanies).where(eq(workflowCompanies.id, selectedId)).limit(1) : [];
+  const options = normalizeWorkspaceQuery(query);
   const selectedCompany = selected ? parseCompany(selected) : undefined;
-  if (selectedCompany)
-    selectedCompany.knowledge = selectedCompany.knowledge.map((source) => ({
-      ...source,
-      ...(knowledgeMetadata[source.id]
-        ? {
-            retrievedAt: knowledgeMetadata[source.id]!.retrievedAt,
-            contentType: knowledgeMetadata[source.id]!.contentType,
-            truncated: knowledgeMetadata[source.id]!.truncated,
-          }
-        : {}),
-    }));
+  if (!selected || !selectedCompany) return { companies: summary, actorId, aiReady: Boolean(aiConfig().key) };
+  const [knowledgeMetadata, governance, activity, inbox] = await Promise.all([
+    (async () => { await ensureWorkflowKnowledgeSchema(); return readKnowledgeFetchMetadata(selected.id); })(),
+    governanceView(selected.id, selected.ownerId),
+    readCompanyActivity(selected.id, selectedCompany.config),
+    options.inbox ? readRequestInbox(selected.id, options) : Promise.resolve(undefined),
+  ]);
+  const detail = options.inbox && options.requestId ? await readRequestDetail(selected.id, options.requestId) : undefined;
+  const requests = options.inbox
+    ? detail ? [detail] : []
+    : await readCompanyRequests(selected.id);
+  selectedCompany.knowledge = selectedCompany.knowledge.map(source => ({ ...source, ...knowledgeMetadata[source.id] }));
   return {
     companies: summary,
     actorId,
     aiReady: Boolean(aiConfig().key),
-    ...(selected && selectedCompany
-      ? {
-          company: {
-            ...selectedCompany,
-            role: roles[companies.findIndex((row) => row.id === selected.id)]!,
-            ...(await governanceView(selected.id, selected.ownerId)),
-            requests: publicRequests,
-            evaluation: evaluateDeliveries(publicRequests),
-          },
-        }
-      : {}),
+    ...(inbox ? { inbox } : {}),
+    ...(detail ? { selectedId: detail.id } : {}),
+    company: {
+      ...selectedCompany,
+      role: summary.find(row => row.id === selected.id)!.role,
+      ...governance,
+      requests,
+      ...activity,
+    },
   };
+}
+
+export async function completeCompanyEvaluation(actorId: string, companyId: string) {
+  await requireReadableCompany(actorId, companyId);
+  const company = await ownedCompany(actorId, companyId);
+  return (await readCompanyActivity(companyId, company.config)).evaluation;
+}
+
+export async function* completeCompanyRecords(actorId: string, companyId: string) {
+  await requireReadableCompany(actorId, companyId);
+  yield* iterateCompanyRequests(companyId);
 }
 
 async function ownedCompany(ownerId: string, companyId: string): Promise<Company> {
@@ -241,6 +218,7 @@ export async function applyAction(
   userName: string,
   raw: unknown,
   inbound?: { submissionId: string; payloadDigest: string },
+  responseQuery: WorkspaceQuery = {},
 ): Promise<WorkspaceResponse> {
   const input = actionSchema.parse(raw);
   const db = getDb();
@@ -264,7 +242,7 @@ export async function applyAction(
       updatedAt: at,
     });
     await auditStatement(id, actorId, "company.created").run();
-    return getWorkspace(actorId, id);
+    return getWorkspace(actorId, id, responseQuery);
   }
   const company = await ownedCompany(actorId, input.companyId);
   const ownerId = company.ownerId;
@@ -313,7 +291,7 @@ export async function applyAction(
           : `member.removed:${input.userId}`,
       ),
     ]);
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (input.action === "rotateCredential" || input.action === "revokeCredential") {
     if (input.action === "revokeCredential") {
@@ -323,7 +301,7 @@ export async function applyAction(
           .bind(company.id, input.kind),
         auditStatement(company.id, actorId, `${input.kind}.revoked`),
       ]);
-      return getWorkspace(actorId, company.id);
+      return getWorkspace(actorId, company.id, responseQuery);
     }
     const token = `est_${input.kind}_${[...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
     const verifier =
@@ -339,7 +317,7 @@ export async function applyAction(
       auditStatement(company.id, actorId, `${input.kind}.rotated`),
     ]);
     return {
-      ...(await getWorkspace(actorId, company.id)),
+      ...(await getWorkspace(actorId, company.id, responseQuery)),
       issuedCredential: { kind: input.kind, value: token },
     };
   }
@@ -384,7 +362,7 @@ export async function applyAction(
       actorId,
       `configuration.saved:v${updatedConfig.version}`,
     ).run();
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (
     input.action === "addKnowledge" ||
@@ -442,18 +420,10 @@ export async function applyAction(
         409,
       );
     await auditStatement(company.id, actorId, input.action).run();
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (input.action === "createRequest") {
     const intakeActor = inbound ? `webhook:${company.id}` : actorId;
-    const count = await workflowDb()
-      .prepare("SELECT COUNT(*) AS n FROM workflow_requests WHERE company_id = ?")
-      .bind(company.id)
-      .first<{ n: number }>();
-    if ((count?.n ?? 0) >= 200)
-      throw new ClientWorkflowError(
-        "This workspace supports at most 200 requests. Export and archive delivery records before adding more.",
-      );
     if (input.attachments.length && !input.uploadVerified)
       throw new ClientWorkflowError(
         "Request files must be uploaded through the private file intake route.",
@@ -546,7 +516,7 @@ export async function applyAction(
       request.updatedAt = new Date().toISOString();
       await saveRequest(ownerId, request, 1, company.id, intakeActor, "request.analysis_finished");
     }
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, { ...responseQuery, requestId: request.id });
   }
   const { request, row } = await ownedRequest(
     actorId,
@@ -642,7 +612,7 @@ export async function applyAction(
       actorId,
       input.action === "submitDelivery" ? "delivery.submitted" : `delivery.${input.decision}`,
     );
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (input.action === "saveTracking") {
     if (request.status !== "frozen")
@@ -712,7 +682,7 @@ export async function applyAction(
         ? "commitment.tracking_and_scope_change_saved"
         : "commitment.tracking_saved",
     );
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (input.action === "deleteRequest") {
     if (request.status === "frozen")
@@ -743,7 +713,7 @@ export async function applyAction(
         .filter((key): key is string => Boolean(key));
       if (keys.length) await bucket.delete(keys);
     }
-    return getWorkspace(actorId, company.id);
+    return getWorkspace(actorId, company.id, responseQuery);
   }
   if (request.status === "frozen")
     throw new ClientWorkflowError(
@@ -880,7 +850,7 @@ export async function applyAction(
     request.status = "frozen";
     await saveRequest(ownerId, request, expectedVersion, company.id, actorId, input.action);
   }
-  return getWorkspace(actorId, company.id);
+  return getWorkspace(actorId, company.id, responseQuery);
 }
 
 export const responseError = (error: unknown) => {

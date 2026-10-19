@@ -1,11 +1,23 @@
-import { applyAction, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
+import { applyAction, completeCompanyEvaluation, completeCompanyRecords, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
 import { env } from "cloudflare:workers";
 import { companyWorkspaceAccess } from "../../../lib/company-workspace-access";
 import { requireCompanyRole } from "../../../lib/workflow-governance";
 import { workflowDb } from "../../../lib/workflow-governance";
+import { requireReadableCompany } from "../../../lib/workflow-queries";
+import { normalizeWorkspaceQuery } from "../../../lib/workflow-query-types";
 import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
 
 export const dynamic = "force-dynamic";
+
+function readWorkspaceQuery(url: URL) {
+  return normalizeWorkspaceQuery({
+    inbox: url.searchParams.get("inbox") === "1",
+    offset: Number(url.searchParams.get("offset") ?? "0"),
+    limit: Number(url.searchParams.get("limit") ?? "25"),
+    query: url.searchParams.get("q") ?? "",
+    requestId: url.searchParams.get("request") ?? undefined,
+  });
+}
 
 async function rejectPost(request: Request, error: string, status: number) {
   // Consume small rejected uploads so the Worker proxy can reuse its connection.
@@ -36,12 +48,26 @@ export async function GET(request: Request) {
     const requestId = url.searchParams.get("request");
     const fileId = url.searchParams.get("file");
     if (companyId && requestId && fileId) return await requestFile(user.userId, companyId, requestId, fileId);
-    const workspace = await getWorkspace(user.userId, companyId);
-    if (url.searchParams.has("view")) {
-      if (!companyId || !workspace.company) return Response.json({ error: "Company workspace not found." }, { status: 404 });
-      if (url.searchParams.get("view") === "evaluation") return Response.json(workspace.company.evaluation, { headers: { "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-evaluation.json" } });
-      if (url.searchParams.get("view") === "export") return new Response(exportDeliveryRecords(workspace.company.requests).map(row => JSON.stringify(row)).join("\n") + "\n", { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-records.jsonl" } });
+    const view = url.searchParams.get("view");
+    if (view === "evaluation" || view === "export") {
+      if (!companyId) throw new ClientWorkflowError("Choose a company workspace.", 400);
+      if (view === "evaluation") return Response.json(await completeCompanyEvaluation(user.userId, companyId), { headers: { "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-evaluation.json" } });
+      await requireReadableCompany(user.userId, companyId);
+      const records = completeCompanyRecords(user.userId, companyId);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await records.next();
+            if (next.done) { controller.close(); return; }
+            controller.enqueue(encoder.encode(JSON.stringify(exportDeliveryRecords([next.value])[0]) + "\n"));
+          } catch (error) { controller.error(error); }
+        },
+        async cancel() { await records.return(undefined); },
+      });
+      return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-records.jsonl" } });
     }
+    const workspace = await getWorkspace(user.userId, companyId, readWorkspaceQuery(url));
     return Response.json(workspace, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return responseError(error); }
 }
@@ -66,7 +92,7 @@ export async function POST(request: Request) {
       if (typeof serialized !== "string" || serialized.length > 1024000) return Response.json({ error: "The request metadata is missing or too large." }, { status: 400 });
       const parsed = JSON.parse(serialized) as { action?: string; companyId?: string; title?: string; text?: string; attachments?: Array<{ name: string; type: string; size: number; sha256: string; text: string; status: string; message?: string; locators: string[]; truncated: boolean }> };
       if (parsed.action !== "createRequest" || !parsed.companyId || typeof parsed.title !== "string") return Response.json({ error: "Files can only be attached to a new request." }, { status: 400 });
-      const owned = await getWorkspace(user.userId, parsed.companyId);
+      const owned = await getWorkspace(user.userId, parsed.companyId, { inbox: true });
       if (!owned.company) return Response.json({ error: "Company workspace not found." }, { status: 404 });
       requireCompanyRole(owned.company.role, ["admin", "estimator"]);
       const files = form.getAll("files");
@@ -108,7 +134,7 @@ export async function POST(request: Request) {
     if (access.publicDemo && body && typeof body === "object" && (body as { action?: unknown }).action === "createRequest") {
       body = { ...(body as Record<string, unknown>), cohort: "synthetic" };
     }
-    return Response.json(await applyAction(user.userId, user.displayName, body), { headers: { "Cache-Control": "no-store" } });
+    return Response.json(await applyAction(user.userId, user.displayName, body, undefined, readWorkspaceQuery(new URL(request.url))), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     // Keep originals if the record committed but analysis or response loading failed.
     const persisted = uploadedRequestId ? await workflowDb().prepare("SELECT id FROM workflow_requests WHERE id = ?").bind(uploadedRequestId).first().catch(() => true) : false;

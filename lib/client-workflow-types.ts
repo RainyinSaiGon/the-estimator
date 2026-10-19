@@ -1,5 +1,6 @@
 import { evaluateReviewDecisions } from "./review-policy.ts";
 import { reviewBlockerMessages } from "./review-policy-messages.ts";
+import type { RequestInboxPage } from "./workflow-query-types";
 
 export const requestTypes = ["demo", "setup", "migration", "integration", "customization", "support"] as const;
 export type RequestType = typeof requestTypes[number];
@@ -114,12 +115,13 @@ export type Company = {
   connectors: { webhookConfigured: boolean; mcpConfigured: boolean; encryptionReady: boolean; lastInboundAt?: string; lastInboundStatus?: string };
   audit: WorkflowAudit[];
   evaluation: DeliveryEvaluation;
+  insights?: import("./workflow-activity").CompanyActivityInsights;
   config: CompanyConfig;
   knowledge: KnowledgeSource[];
   requests: ClientRequest[];
 };
 export type CompanySummary = { id: string; name: string; version: number; role: CompanyRole; requestCount: number };
-export type WorkspaceResponse = { companies: CompanySummary[]; company?: Company; selectedId?: string; aiReady: boolean; actorId: string; issuedCredential?: { kind: "webhook" | "mcp"; value: string } };
+export type WorkspaceResponse = { inbox?: RequestInboxPage; companies: CompanySummary[]; company?: Company; selectedId?: string; aiReady: boolean; actorId: string; issuedCredential?: { kind: "webhook" | "mcp"; value: string } };
 
 /** Compatibility helper for callers that validate only review decisions. */
 export function scopeReviewBlockers(review: ScopeReview, analysis: ClientAnalysis): string[] {

@@ -1,12 +1,16 @@
 "use client";
 
 import { ArrowLeft, Search } from "lucide-react";
+import type { RequestInboxPage, RequestSummary } from "../../../lib/workflow-query-types";
 import type { ClientRequest } from "../../../lib/client-workflow-types";
 import { requestStatusLabel, requestStatusTone, typeLabel } from "../request-presentation";
-import { input } from "../ui";
+import { input, secondary } from "../ui";
 
 type RequestInboxProps = {
-  requests: ClientRequest[];
+  requests: (ClientRequest | RequestSummary)[];
+  page?: RequestInboxPage;
+  busy?: boolean;
+  onPageChange?: (offset: number) => void;
   query: string;
   publicDemo: boolean;
   onQueryChange: (value: string) => void;
@@ -15,20 +19,23 @@ type RequestInboxProps = {
 
 export function RequestInbox({
   requests,
+  page,
+  busy = false,
+  onPageChange,
   query,
   publicDemo,
   onQueryChange,
   onOpenRequest,
 }: RequestInboxProps) {
-  const visibleRequests = requests.filter((item) => {
+  const visibleRequests = page ? requests : requests.filter((item) => {
     const normalizedQuery = query.trim().toLocaleLowerCase();
     return (
       !normalizedQuery ||
       [
         item.title,
-        item.text,
+        "text" in item ? item.text : "",
         item.status,
-        typeLabel[item.review.requestType] ?? item.review.requestType,
+        typeLabel["requestType" in item ? item.requestType : item.review.requestType],
       ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery))
     );
   });
@@ -51,7 +58,7 @@ export function RequestInbox({
           />
         </label>
         <p className="text-xs text-estimator-muted">
-          {visibleRequests.length} of {requests.length} shown
+          {page ? `${page.offset + (visibleRequests.length ? 1 : 0)}–${page.offset + visibleRequests.length} of ${page.total}` : `${visibleRequests.length} of ${requests.length}`} shown
         </p>
       </div>
       <div className="max-h-[65vh] divide-y divide-estimator-line overflow-y-auto border-y border-estimator-line">
@@ -68,7 +75,7 @@ export function RequestInbox({
                   {item.title}
                 </strong>
                 <span className="mt-1 block text-xs leading-5 text-estimator-muted">
-                  {typeLabel[item.analysis?.requestType ?? item.review.requestType] ??
+                  {typeLabel["requestType" in item ? item.requestType : item.analysis?.requestType ?? item.review.requestType] ??
                     "Client brief"}{" "}
                   ·{" "}
                   <time dateTime={item.createdAt}>
@@ -95,7 +102,12 @@ export function RequestInbox({
           );
         })}
       </div>
-      {!requests.length && (
+      {page && page.total > page.limit && <nav aria-label="Client brief pages" className="mt-4 flex items-center justify-between gap-3">
+        <button type="button" className={secondary} disabled={busy || page.offset === 0} onClick={() => onPageChange?.(Math.max(0, page.offset - page.limit))}>Previous</button>
+        <span className="text-xs text-estimator-muted">Page {Math.floor(page.offset / page.limit) + 1} of {Math.max(1, Math.ceil(page.total / page.limit))}</span>
+        <button type="button" className={secondary} disabled={busy || page.offset + page.limit >= page.total} onClick={() => onPageChange?.(page.offset + page.limit)}>Next</button>
+      </nav>}
+      {!requests.length && !query.trim() && (!page || page.total === 0) && (
         <div className="py-12 text-center">
           <h3 className="text-lg font-semibold">No client briefs yet</h3>
           <p className="mt-2 text-sm leading-6 text-estimator-muted">
@@ -105,7 +117,7 @@ export function RequestInbox({
           </p>
         </div>
       )}
-      {requests.length > 0 && visibleRequests.length === 0 && (
+      {(query.trim() || (page && page.total > 0)) && visibleRequests.length === 0 && (
         <p className="rounded-xl bg-estimator-paper p-4 text-sm text-estimator-muted">
           No requests match “{query}”.
         </p>
