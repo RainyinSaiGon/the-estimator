@@ -136,7 +136,7 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
     const scopeResponse = await fetchImpl(analyzeUrl, { method: "POST", headers, body: analyzeBody, signal: signalForRemainingTime(), cache: "no-store" });
     const scopeBody = await scopeResponse.json().catch(() => ({})) as Record<string, unknown>;
     if (!scopeResponse.ok) {
-      if (scopeResponse.status === 504) return Response.json({ error: "The analysis took too long. Try again or use sample mode." }, { status: 503 });
+      if (scopeResponse.status === 504) return Response.json({ error: "AI analysis took too long. Please try again." }, { status: 503 });
       return errorResponse(scopeBody.detail, scopeResponse.status);
     }
 
@@ -145,7 +145,7 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
     }
     return Response.json({ scope: scopeBody }, { headers: { "cache-control": "no-store" } });
   } catch (cause) {
-    const message = cause instanceof Error && cause.name === "TimeoutError" ? "A service took too long to respond. Try again or use sample mode." : "A preview service is unavailable. Start the local services and try again.";
+    const message = cause instanceof Error && cause.name === "TimeoutError" ? "AI analysis took too long. Please try again." : "AI analysis is unavailable. Check the local services and try again.";
     return Response.json({ error: message }, { status: 503 });
   }
 }
@@ -297,7 +297,7 @@ export async function handleEstimateConfirmation(request: Request, dependencies:
     if (!estimateResponse.ok) return errorResponse(estimateBody.error, estimateResponse.status);
     return Response.json({ estimate: estimateBody }, { headers: { "cache-control": "no-store" } });
   } catch (cause) {
-    const message = cause instanceof Error && cause.name === "TimeoutError" ? "A service took too long to respond. Try again or use sample mode." : "The estimator service is unavailable. Start the local services and try again.";
+    const message = cause instanceof Error && cause.name === "TimeoutError" ? "Estimate calculation took too long. Please try again." : "Estimate calculation is unavailable. Check the local services and try again.";
     return Response.json({ error: message }, { status: 503 });
   }
 }

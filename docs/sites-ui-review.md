@@ -38,6 +38,32 @@ requests. It does not establish recorded delivery performance.
 | Legacy history | Metrics, CSV import controls, reference table and learning empty state |
 | Dialogs | New request and help; scrollable phone layout |
 
+## Separate Next.js application (`apps/web`)
+
+This companion app is served locally at `localhost:3000`; it is separate from
+the hosted Sites application above. The landing page reuses the interactive,
+ElevenLabs-inspired workflow presentation. Its regular entry opens an empty
+AI-only estimate form; the fictional example preloads illustrative text and
+still uses AI analysis. Its shared styles give inputs and buttons clear
+boundaries, 44px minimum control height, visible keyboard focus, and reduced-
+motion handling.
+
+| Route or state | Coverage and local result |
+| --- | --- |
+| Landing page | Hero, workflow tabs, synthetic-data illustration, workflow cards and both calls to action |
+| `/estimate` | Empty request intake, supported-file affordance, AI-only analysis notice, review placeholder and saved-estimate state |
+| `/estimate?sample=1` | Fictional brief preloaded; AI-only analysis remains selected |
+| `/sign-in` | Sign-in and registration forms; identity setup notice when the local identity service is unavailable |
+| `/password-recovery` and `/verify-email` | Recovery and verification forms with visible input borders and focus styles |
+| `/account` and `/workspace` | Authentication gates redirect to the landing page or sign-in because local identity is not configured; authenticated views cannot be inspected here |
+
+At 390px, landing, estimate, sign-in, recovery and verification routes had no
+document-width overflow. `/account` and `/workspace` resolved to their expected
+authentication redirects. At 1280px, the restored landing page rendered its
+two-column hero and interactive workflow preview. This check did not submit an
+AI request or create an account. The companion app is not part of the current
+Sites deployment.
+
 Review desktop and phone layouts with browser screenshots and check document
 scroll width against viewport width. Check intermediate widths for the request
 editor and template fields. These checks supplement the type check, production

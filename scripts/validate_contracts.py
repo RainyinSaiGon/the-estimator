@@ -450,11 +450,11 @@ def check_bff_route(spec: dict[str, Any], scope: dict[str, Any], estimate: dict[
         "oversized-body": "Request body is too large.",
         "ai-provider-error": "AI session permission is missing.",
         "python-error": "This brief is not supported.",
-        "python-timeout-response": "The analysis took too long. Try again or use sample mode.",
+        "python-timeout-response": "AI analysis took too long. Please try again.",
         "estimator-error": "Invalid estimate request.",
-        "upstream-unavailable": "A preview service is unavailable. Start the local services and try again.",
-        "brief-timeout": "A service took too long to respond. Try again or use sample mode.",
-        "estimator-timeout": "A service took too long to respond. Try again or use sample mode.",
+        "upstream-unavailable": "AI analysis is unavailable. Check the local services and try again.",
+        "brief-timeout": "AI analysis took too long. Please try again.",
+        "estimator-timeout": "Estimate calculation took too long. Please try again.",
     }
     actual_names = {item.get("name") for item in results}
     if actual_names != set(expected_statuses):
