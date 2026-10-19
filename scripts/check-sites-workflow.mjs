@@ -40,7 +40,7 @@ async function action(body, actor = "qa-owner", status = 200) {
   const response = await fetch(url, { method: "POST", headers: headers(actor), body: JSON.stringify({ companyId, ...body }) });
   const data = await response.json(); assert.equal(response.status, status, JSON.stringify(data)); return data;
 }
-async function workspace(actor = "qa-owner") { const response = await fetch(url + "?company=" + companyId, { headers: headers(actor) }); assert.equal(response.status, 200); return response.json(); }
+async function workspace(actor = "qa-owner") { const response = await fetch(url + "?company=" + companyId, { headers: headers(actor), signal: AbortSignal.timeout(15000) }); assert.equal(response.status, 200); return response.json(); }
 async function mcp(body, credential, scope = companyId, status = 200) {
   const response = await fetch(origin + "/mcp?company=" + scope, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream", ...(credential ? { authorization: "Bearer " + credential } : {}) }, body: JSON.stringify({ jsonrpc: "2.0", id: 1, ...body }) });
   assert.equal(response.status, status, await response.clone().text()); return response.json();
@@ -48,7 +48,11 @@ async function mcp(body, credential, scope = companyId, status = 200) {
 try {
   for (let attempt = 0; attempt < 300; attempt++) { if (worker.exitCode != null) throw new Error(logs); try { if ((await fetch(url)).status === 401) break; } catch {} await new Promise(resolve => setTimeout(resolve, 100)); }
   assert.equal((await fetch(url)).status, 401);
-  assert.equal((await fetch(url, { method: "POST", headers: { ...headers("qa-owner"), origin: "https://other.invalid" }, body: "{}" })).status, 403);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const rejected = await fetch(url, { method: "POST", headers: { ...headers("qa-owner"), origin: "https://other.invalid" }, body: "{}", signal: AbortSignal.timeout(15000) });
+    assert.equal(rejected.status, 403); await rejected.text();
+    assert.equal((await workspace("qa-stranger")).company, undefined);
+  }
   assert.equal((await workspace("qa-stranger")).company, undefined);
   for (const [userId, role] of [["qa-reviewer", "reviewer"], ["qa-viewer", "viewer"], ["qa-estimator", "estimator"]]) await action({ action: "setMember", userId, displayName: userId, role });
   await action({ action: "saveConfiguration", expectedVersion: 1, config }, "qa-viewer", 403);
