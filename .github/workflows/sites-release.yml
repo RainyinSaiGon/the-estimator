@@ -30,7 +30,7 @@ jobs:
           npm run typecheck
           node --experimental-strip-types --test tests/estimator.test.mjs tests/workflow-source-evidence.test.mjs tests/sites-delivery-evaluation.test.mjs tests/workflow-product-selection.test.mjs
       - name: Build the complete Sites application
-        run: npm run build:legacy
+        run: npm run build:sites
       - name: Check compiled Worker workflows with isolated local storage
         run: node scripts/check-sites-workflow.mjs
       - name: Package exact GitHub source and release provenance

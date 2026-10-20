@@ -23,7 +23,7 @@ build/                      Sites and preview build integrations
 vendor/                     Vendored build/runtime dependencies
 ```
 
-The root `package.json` owns shared JavaScript dependencies and delegates `dev`, `build`, and `start` to `apps/web`. Its `*:legacy` commands use the root Sites app. The Python and Go services keep their own manifests and container definitions under `services/`.
+The root `package.json` owns shared JavaScript dependencies. `*:sites` commands run the deployed product source in the repository root; `*:preview` commands run the separate Next.js service preview in `apps/web`. The older `dev`/`build`/`start` commands remain aliases for the service preview, and `*:legacy` remains an alias for `*:sites` during migration. The Python and Go services keep their own manifests and container definitions under `services/`.
 
 Keep changes with the runtime that owns them: Sites UI and D1 behavior in the root folders; new preview routes and BFF code in `apps/web`; identity, estimation, and extraction logic in their corresponding service folders. Contract changes belong in `contracts/` and must match the owning service.
 

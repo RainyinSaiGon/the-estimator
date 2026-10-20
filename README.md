@@ -38,7 +38,7 @@ Put the generated value in `.env.local` as `BRIEF_SERVICE_TOKEN_SECRET` and set 
 docker compose --env-file .env.local up --build
 ```
 
-This starts the basic service preview. For the complete AI company workspace at [http://localhost:3000/workspace](http://localhost:3000/workspace), configure OpenAI, first-party identity and private storage using [the setup guide](docs/company-workflow.md#run-locally). See [Local development](docs/local-development.md) for keys, email verification and the legacy runtime.
+This starts the basic service preview. For the complete AI company workspace at [http://localhost:3000/workspace](http://localhost:3000/workspace), configure OpenAI, first-party identity and private storage using [the setup guide](docs/company-workflow.md#run-locally). See [Local development](docs/local-development.md) for the `*:preview` and `*:sites` commands, keys, email verification, and local Sites runtime.
 
 ## Repository layout
 
@@ -55,7 +55,8 @@ See the [repository guide](docs/repository-structure.md) and [documentation inde
 npm ci
 npm test
 npm run typecheck
-npm run build
+npm run build:preview
+npm run build:sites
 npm run check:secrets
 ```
 

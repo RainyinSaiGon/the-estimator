@@ -1,11 +1,25 @@
-import { applyAction, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
+import { applyAction, completeCompanyEvaluation, createCompanyRecordsExport, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
 import { env } from "cloudflare:workers";
 import { companyWorkspaceAccess } from "../../../lib/company-workspace-access";
 import { requireCompanyRole } from "../../../lib/workflow-governance";
 import { workflowDb } from "../../../lib/workflow-governance";
+import { normalizeWorkspaceQuery } from "../../../lib/workflow-query-types";
 import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
+import { BROWSER_DOCUMENT_UPLOAD_POLICY, DOCUMENT_EXTRACTION_LIMITS, documentExtension, isSupportedDocumentFormat } from "../../../lib/document-extraction-policy";
+import type { ExtractedDocumentUpload } from "../../../lib/document-extraction-policy";
+import { activateR2ObjectCleanup, drainR2ObjectCleanup, stageR2ObjectCleanup } from "../../../lib/r2-object-cleanup";
 
 export const dynamic = "force-dynamic";
+
+function readWorkspaceQuery(url: URL) {
+  return normalizeWorkspaceQuery({
+    inbox: url.searchParams.get("inbox") === "1",
+    offset: Number(url.searchParams.get("offset") ?? "0"),
+    limit: Number(url.searchParams.get("limit") ?? "25"),
+    query: url.searchParams.get("q") ?? "",
+    requestId: url.searchParams.get("request") ?? undefined,
+  });
+}
 
 async function rejectPost(request: Request, error: string, status: number) {
   // Consume small rejected uploads so the Worker proxy can reuse its connection.
@@ -36,12 +50,25 @@ export async function GET(request: Request) {
     const requestId = url.searchParams.get("request");
     const fileId = url.searchParams.get("file");
     if (companyId && requestId && fileId) return await requestFile(user.userId, companyId, requestId, fileId);
-    const workspace = await getWorkspace(user.userId, companyId);
-    if (url.searchParams.has("view")) {
-      if (!companyId || !workspace.company) return Response.json({ error: "Company workspace not found." }, { status: 404 });
-      if (url.searchParams.get("view") === "evaluation") return Response.json(workspace.company.evaluation, { headers: { "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-evaluation.json" } });
-      if (url.searchParams.get("view") === "export") return new Response(exportDeliveryRecords(workspace.company.requests).map(row => JSON.stringify(row)).join("\n") + "\n", { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-records.jsonl" } });
+    const view = url.searchParams.get("view");
+    if (view === "evaluation" || view === "export") {
+      if (!companyId) throw new ClientWorkflowError("Choose a company workspace.", 400);
+      if (view === "evaluation") return Response.json(await completeCompanyEvaluation(user.userId, companyId), { headers: { "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-evaluation.json" } });
+      const snapshot = await createCompanyRecordsExport(user.userId, companyId);
+      const encoder = new TextEncoder();
+      const stream = new ReadableStream<Uint8Array>({
+        async pull(controller) {
+          try {
+            const next = await snapshot.records.next();
+            if (next.done) { await snapshot.close(); controller.close(); return; }
+            controller.enqueue(encoder.encode(JSON.stringify(exportDeliveryRecords([next.value])[0]) + "\n"));
+          } catch (error) { await snapshot.close().catch(() => undefined); controller.error(error); }
+        },
+        async cancel() { await snapshot.close(); },
+      });
+      return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-records.jsonl" } });
     }
+    const workspace = await getWorkspace(user.userId, companyId, readWorkspaceQuery(url));
     return Response.json(workspace, { headers: { "Cache-Control": "private, no-store" } });
   } catch (error) { return responseError(error); }
 }
@@ -60,18 +87,18 @@ export async function POST(request: Request) {
     await ensureClientWorkflowSchema();
     if (request.headers.get("content-type")?.toLowerCase().startsWith("multipart/form-data")) {
       const contentLength = Number(request.headers.get("content-length") ?? 0);
-      if (contentLength > 25 * 1024 * 1024) return Response.json({ error: "The combined upload must not exceed 20 MB." }, { status: 413 });
+      if (contentLength > BROWSER_DOCUMENT_UPLOAD_POLICY.maxBodyBytes) return Response.json({ error: "The combined upload must not exceed 20 MB." }, { status: 413 });
       const form = await request.formData();
       const serialized = form.get("payload");
       if (typeof serialized !== "string" || serialized.length > 1024000) return Response.json({ error: "The request metadata is missing or too large." }, { status: 400 });
-      const parsed = JSON.parse(serialized) as { action?: string; companyId?: string; title?: string; text?: string; attachments?: Array<{ name: string; type: string; size: number; sha256: string; text: string; status: string; message?: string; locators: string[]; truncated: boolean }> };
+      const parsed = JSON.parse(serialized) as { action?: string; companyId?: string; title?: string; text?: string; attachments?: ExtractedDocumentUpload[] };
       if (parsed.action !== "createRequest" || !parsed.companyId || typeof parsed.title !== "string") return Response.json({ error: "Files can only be attached to a new request." }, { status: 400 });
-      const owned = await getWorkspace(user.userId, parsed.companyId);
+      const owned = await getWorkspace(user.userId, parsed.companyId, { inbox: true });
       if (!owned.company) return Response.json({ error: "Company workspace not found." }, { status: 404 });
       requireCompanyRole(owned.company.role, ["admin", "estimator"]);
       const files = form.getAll("files");
       const metadata = parsed.attachments ?? [];
-      if (!files.length || files.length !== metadata.length || files.length > 10) return Response.json({ error: "Choose between 1 and 10 files and include their extraction results." }, { status: 400 });
+      if (!files.length || files.length !== metadata.length || files.length > BROWSER_DOCUMENT_UPLOAD_POLICY.maxFiles) return Response.json({ error: "Choose between 1 and 10 files and include their extraction results." }, { status: 400 });
       if (!bucket) return Response.json({ error: "Private file storage is not configured for this Site." }, { status: 503 });
       let total = 0;
       const requestId = crypto.randomUUID();
@@ -80,12 +107,12 @@ export async function POST(request: Request) {
       for (let index = 0; index < files.length; index++) {
         const file = files[index];
         if (!(file instanceof File)) throw new ClientWorkflowError("A request attachment was invalid.");
-        const safeName = file.name.split(/[\\/]/).at(-1)?.slice(0, 200) ?? "attachment";
-        const extension = safeName.split(".").at(-1)?.toLowerCase() ?? "";
-        if (!new Set(["pdf", "docx", "xlsx", "csv", "txt", "md", "json", "eml"]).has(extension)) throw new ClientWorkflowError(`${safeName}: file type is not supported.`);
-        if (!file.size || file.size > 10 * 1024 * 1024) throw new ClientWorkflowError(`${safeName}: each file must be 10 MB or smaller.`);
+        const safeName = file.name.split(/[\\/]/).at(-1)?.slice(0, DOCUMENT_EXTRACTION_LIMITS.fileNameCharacters) ?? "attachment";
+        const extension = documentExtension(safeName);
+        if (!isSupportedDocumentFormat(extension)) throw new ClientWorkflowError(`${safeName}: file type is not supported.`);
+        if (!file.size || file.size > BROWSER_DOCUMENT_UPLOAD_POLICY.maxFileBytes) throw new ClientWorkflowError(`${safeName}: each file must be 10 MB or smaller.`);
         total += file.size;
-        if (total > 20 * 1024 * 1024) throw new ClientWorkflowError("The combined file size must not exceed 20 MB.");
+        if (total > BROWSER_DOCUMENT_UPLOAD_POLICY.maxTotalBytes) throw new ClientWorkflowError("The combined file size must not exceed 20 MB.");
         const details = metadata[index];
         if (!details || details.name !== safeName || details.type !== extension || details.size !== file.size || !/^[a-f0-9]{64}$/.test(details.sha256)) throw new ClientWorkflowError(`${safeName}: file metadata does not match the uploaded file.`);
         const bytes = await file.arrayBuffer();
@@ -93,8 +120,9 @@ export async function POST(request: Request) {
         if (hash !== details.sha256) throw new ClientWorkflowError(`${safeName}: file changed after extraction. Select it again.`);
         const id = crypto.randomUUID();
         const objectKey = `request-files/${encodeURIComponent(owned.company.ownerId)}/${parsed.companyId}/${requestId}/${id}`;
-        await bucket.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: owned.company.ownerId, companyId: parsed.companyId, requestId, fileId: id, sha256: hash } });
+        await stageR2ObjectCleanup(objectKey);
         storedKeys.push(objectKey);
+        await bucket.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: owned.company.ownerId, companyId: parsed.companyId, requestId, fileId: id, sha256: hash } });
         attachments.push({ ...details, name: safeName, id, objectKey });
       }
       body = { ...parsed, requestId, uploadVerified: true, attachments };
@@ -108,11 +136,14 @@ export async function POST(request: Request) {
     if (access.publicDemo && body && typeof body === "object" && (body as { action?: unknown }).action === "createRequest") {
       body = { ...(body as Record<string, unknown>), cohort: "synthetic" };
     }
-    return Response.json(await applyAction(user.userId, user.displayName, body), { headers: { "Cache-Control": "no-store" } });
+    return Response.json(await applyAction(user.userId, user.displayName, body, undefined, readWorkspaceQuery(new URL(request.url))), { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     // Keep originals if the record committed but analysis or response loading failed.
     const persisted = uploadedRequestId ? await workflowDb().prepare("SELECT id FROM workflow_requests WHERE id = ?").bind(uploadedRequestId).first().catch(() => true) : false;
-    if (!persisted && bucket && storedKeys.length) await bucket.delete(storedKeys).catch(() => undefined);
+    if (!persisted && bucket && storedKeys.length) {
+      await activateR2ObjectCleanup(storedKeys).catch(() => undefined);
+      await drainR2ObjectCleanup(storedKeys.length).catch(() => undefined);
+    }
     return responseError(error);
   }
 }

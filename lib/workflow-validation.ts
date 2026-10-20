@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requestTypes } from "./client-workflow-types";
+import { BROWSER_DOCUMENT_UPLOAD_POLICY, DOCUMENT_EXTRACTION_LIMITS, DOCUMENT_EXTRACTION_STATUSES } from "./document-extraction-policy";
 
 const requestTypeSchema = z.enum(requestTypes);
 
@@ -92,23 +93,23 @@ export const actionSchema = z.discriminatedUnion("action", [
       .array(
         z.object({
           id: z.string().uuid(),
-          name: z.string().min(1).max(200),
+          name: z.string().min(1).max(DOCUMENT_EXTRACTION_LIMITS.fileNameCharacters),
           type: z.string().min(1).max(16),
           size: z
             .number()
             .int()
             .positive()
-            .max(10 * 1024 * 1024),
+            .max(BROWSER_DOCUMENT_UPLOAD_POLICY.maxFileBytes),
           sha256: z.string().regex(/^[a-f0-9]{64}$/),
-          text: z.string().max(40000),
-          status: z.enum(["extracted", "needs_attention", "ocr_required"]),
+          text: z.string().max(DOCUMENT_EXTRACTION_LIMITS.textCharacters),
+          status: z.enum(DOCUMENT_EXTRACTION_STATUSES),
           message: z.string().max(1000).optional(),
-          locators: z.array(z.string().max(100)).max(200),
+          locators: z.array(z.string().max(DOCUMENT_EXTRACTION_LIMITS.locatorCharacters)).max(DOCUMENT_EXTRACTION_LIMITS.locators),
           truncated: z.boolean(),
           objectKey: z.string().min(1).max(500),
         }),
       )
-      .max(10)
+      .max(BROWSER_DOCUMENT_UPLOAD_POLICY.maxFiles)
       .default([]),
   }),
   z.object({

@@ -5,8 +5,10 @@ import { PUBLIC_DEMO_ACTOR_ID } from "./public-demo-access";
 import { ClientWorkflowError } from "./workflow-errors";
 import { revealWebhookCredential, textDigest, workflowDb } from "./workflow-governance";
 import type { RequestAttachment } from "./client-workflow-types";
+import { completeDocumentExtraction, DOCUMENT_EXTRACTION_LIMITS, documentExtension, failedDocumentExtraction, isSupportedDocumentFormat, paragraphDocumentText, plainDocumentText, spreadsheetDocumentText, WEBHOOK_DOCUMENT_UPLOAD_POLICY } from "./document-extraction-policy";
+import type { DocumentExtraction, DocumentFormat } from "./document-extraction-policy";
 
-const payloadSchema = z.object({ submissionId: z.string().trim().min(1).max(200), title: z.string().trim().min(3).max(200), text: z.string().max(20000).default(""), cohort: z.enum(["synthetic", "recorded"]), attachments: z.array(z.object({ name: z.string().min(1).max(200), contentBase64: z.string().min(1).max(2800000) })).max(10).default([]) });
+const payloadSchema = z.object({ submissionId: z.string().trim().min(1).max(200), title: z.string().trim().min(3).max(200), text: z.string().max(20000).default(""), cohort: z.enum(["synthetic", "recorded"]), attachments: z.array(z.object({ name: z.string().min(1).max(DOCUMENT_EXTRACTION_LIMITS.fileNameCharacters), contentBase64: z.string().min(1).max(WEBHOOK_DOCUMENT_UPLOAD_POLICY.maxBase64Characters) })).max(WEBHOOK_DOCUMENT_UPLOAD_POLICY.maxFiles).default([]) });
 
 export async function readBoundedBody(request: Request, limit: number) {
   if (Number(request.headers.get("content-length") ?? 0) > limit) throw new ClientWorkflowError("The inbound payload exceeds 5 MB.", 413);
@@ -26,9 +28,8 @@ export async function readBoundedBody(request: Request, limit: number) {
   return new TextDecoder().decode(bytes);
 }
 
-async function extractInbound(bytes: Uint8Array, extension: string) {
-  let text = "", locators: string[] = [];
-  let truncated = false;
+async function extractInbound(bytes: Uint8Array, extension: DocumentFormat) {
+  let extracted: DocumentExtraction;
   if (extension === "pdf") {
     const [pdfjs, worker] = await Promise.all([
       import("pdfjs-dist/legacy/build/pdf.mjs"),
@@ -40,41 +41,35 @@ async function extractInbound(bytes: Uint8Array, extension: string) {
     const task = pdfjs.getDocument({ data: bytes.slice(), useWorkerFetch: false, disableFontFace: true, maxImageSize: 1024 * 1024 });
     const document = await task.promise;
     try {
-      const pageCount = Math.min(document.numPages, 100);
-      const pages: string[] = [];
+      const pageCount = Math.min(document.numPages, DOCUMENT_EXTRACTION_LIMITS.pdfPages);
+      const pages: string[] = [], locators: string[] = [];
+      let truncated = document.numPages > pageCount;
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber++) {
         const page = await document.getPage(pageNumber);
         const content = await page.getTextContent();
         const pageText = content.items.map(item => "str" in item ? item.str : "").join(" ").replace(/\s+/g, " ").trim();
         if (pageText) { pages.push(`[Page ${pageNumber}] ${pageText}`); locators.push(`Page ${pageNumber}`); }
-        if (pages.join("\n\n").length >= 40000) { truncated = true; break; }
+        if (pages.join("\n\n").length >= DOCUMENT_EXTRACTION_LIMITS.textCharacters) { truncated ||= pageNumber < document.numPages; break; }
       }
-      text = pages.join("\n\n");
-      truncated ||= document.numPages > pageCount;
+      extracted = { text: pages.join("\n\n"), locators, truncated };
     } finally {
       await task.destroy();
     }
   } else if (extension === "docx") {
     const mammoth = await import("mammoth/mammoth.browser");
     const result = await mammoth.extractRawText({ arrayBuffer: bytes.slice().buffer });
-    const paragraphs = result.value.split(/\n\s*\n/).filter(Boolean);
-    text = paragraphs.map((paragraph, index) => `[Paragraph ${index + 1}] ${paragraph}`).join("\n\n");
-    locators = paragraphs.map((_, index) => `Paragraph ${index + 1}`);
+    extracted = paragraphDocumentText(result.value);
   } else if (extension === "xlsx") {
     const XLSX = await import("xlsx");
-    const workbook = XLSX.read(bytes, { type: "array", cellFormula: false, cellHTML: false, bookVBA: false });
-    text = workbook.SheetNames.slice(0, 30).map(name => `[Sheet: ${name}]\n${XLSX.utils.sheet_to_csv(workbook.Sheets[name])}`).join("\n\n");
-    locators = workbook.SheetNames.slice(0, 30).map(name => `Sheet ${name}`);
-  } else if (extension !== "pdf") {
-    text = new TextDecoder().decode(bytes);
-    if (extension === "csv") {
-      text = text.split(/\r?\n/).map((line, index) => `[Row ${index + 1}] ${line}`).join("\n");
-      locators = text.split(/\r?\n/).map((_, index) => `Row ${index + 1}`);
-    } else locators = ["Document text"];
+    const workbook = XLSX.read(bytes, { type: "array", cellFormula: false, cellHTML: false, cellText: true, bookVBA: false, WTF: false });
+    extracted = spreadsheetDocumentText(workbook.SheetNames, name => {
+      const sheet = workbook.Sheets[name];
+      return sheet ? XLSX.utils.sheet_to_csv(sheet, { blankrows: false, strip: false }) : undefined;
+    });
+  } else {
+    extracted = plainDocumentText(new TextDecoder("utf-8", { fatal: false }).decode(bytes), extension);
   }
-  const limited = text.slice(0, 40000);
-  const status = limited.trim() ? "extracted" as const : extension === "pdf" ? "ocr_required" as const : "needs_attention" as const;
-  return { text: limited, locators: locators.slice(0, 200), truncated: truncated || text.length > 40000, status, ...(!limited.trim() ? { message: extension === "pdf" ? "No selectable text was found in this PDF. OCR is required for scanned or image-only pages." : "No readable text was extracted. Review the original before confirming scope." } : {}) };
+  return completeDocumentExtraction(extension, extracted);
 }
 
 export async function receiveInbound(request: Request, companyId: string) {
@@ -82,7 +77,7 @@ export async function receiveInbound(request: Request, companyId: string) {
   await ensureClientWorkflowSchema();
   // Consume the bounded request body even when rejecting stale headers.
   // This also keeps local HTTP proxy connections reusable after a rejection.
-  const raw = await readBoundedBody(request, 5 * 1024 * 1024);
+  const raw = await readBoundedBody(request, WEBHOOK_DOCUMENT_UPLOAD_POLICY.maxBodyBytes);
   const timestamp = request.headers.get("x-workflow-timestamp") ?? "";
   if (!z.string().datetime().safeParse(timestamp).success || Math.abs(Date.now() - Date.parse(timestamp)) > 300000) throw new ClientWorkflowError("The webhook timestamp is missing or expired.", 401);
   const signature = request.headers.get("x-workflow-signature") ?? "";
@@ -122,19 +117,19 @@ export async function receiveInbound(request: Request, companyId: string) {
   try {
     for (const item of input.attachments) {
       const name = item.name.split(/[\\/]/).at(-1)!;
-      const extension = name.split(".").at(-1)?.toLowerCase() ?? "";
-      if (!["pdf", "docx", "xlsx", "csv", "txt", "md", "json", "eml"].includes(extension)) throw new ClientWorkflowError(`${name}: unsupported file type.`);
+      const extension = documentExtension(name);
+      if (!isSupportedDocumentFormat(extension)) throw new ClientWorkflowError(`${name}: unsupported file type.`);
       if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(item.contentBase64)) throw new ClientWorkflowError(`${name}: invalid Base64.`);
       const bytes = Uint8Array.from(atob(item.contentBase64), char => char.charCodeAt(0));
       total += bytes.length;
-      if (!bytes.length || bytes.length > 2 * 1024 * 1024 || total > 4 * 1024 * 1024) throw new ClientWorkflowError("Webhook files must be at most 2 MB each and 4 MB combined.", 413);
+      if (!bytes.length || bytes.length > WEBHOOK_DOCUMENT_UPLOAD_POLICY.maxFileBytes || total > WEBHOOK_DOCUMENT_UPLOAD_POLICY.maxTotalBytes) throw new ClientWorkflowError("Webhook files must be at most 2 MB each and 4 MB combined.", 413);
       const sha256 = [...new Uint8Array(await crypto.subtle.digest("SHA-256", bytes))].map(byte => byte.toString(16).padStart(2, "0")).join("");
       const id = crypto.randomUUID();
       const objectKey = `request-files/${encodeURIComponent(company.owner_id)}/${companyId}/${requestId}/${id}`;
       let extraction: Awaited<ReturnType<typeof extractInbound>>;
       try { extraction = await extractInbound(bytes, extension); }
       catch {
-        extraction = { text: "", locators: [], truncated: false, status: "needs_attention", message: "This attachment could not be extracted. Review the original and reconcile missing content before confirming scope." };
+        extraction = failedDocumentExtraction();
       }
       await bucket!.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: company.owner_id, companyId, requestId, fileId: id, sha256 } });
       storedKeys.push(objectKey);

@@ -39,3 +39,15 @@ Publish through the repository's existing release process after review. Producti
 ## Follow-up boundaries
 
 The separate Next.js workspace and Go workflow service also contain large modules, but their data and runtime contracts differ from Sites. Refactor them in separate changes rather than sharing storage or authorization implementations across runtimes. Further separation of the screen's asynchronous state orchestration and remaining screen layout can be reviewed independently after this first pass.
+
+## Workspace controller and scope drafts (#79)
+
+`use-workspace-controller.ts` owns company/request selection, response ordering, pending operation identities, errors and notices. Company selection triggers one read. Reads accept cancellation and a generation check, and wait for that company's queued mutations before fetching. Mutations serialize within each company; responses and errors from an earlier company or request selection are ignored. Each pending operation clears only its own identity, and all pending operations in the selected company contribute to the busy indicator.
+
+`use-scope-review-drafts.ts` keeps dirty reviews and unfinished reviewer questions by company and request for the lifetime of this tab. Refreshing a server record does not replace a dirty draft. A changed saved review blocks further saving until deliberate discard/reload. Save acknowledgement retains edits typed while saving and keeps their editor open. Navigation explains that drafts remain in this tab, and closing a tab with dirty drafts requests the browser's unload confirmation. Drafts are not persisted across reloads.
+
+Discard controls explicitly discard the current draft, close its editor and fetch the saved workspace again. If the reload fails, the controller reports the error; the user can reload or select another company. The scope workflow, action payloads, expected-version checks and existing focus/menu behavior remain in the screen and feature components.
+
+The query/detail follow-up (#81) can supply a read callback through `load(companyId, (signal) => ...)`, while mutations continue through `run(name, work)`. The workspace transport accepts `api(body, companyId, signal?)`. Pagination can extend that signature with a fourth query argument without changing cancellation. Detail reads should set the selected request before invoking `load`, and all reads and mutation responses must retain the selected request in `company.requests` when it remains available; the controller clears selection when a response omits it.
+
+Verification for this change used TypeScript typechecking, scoped ESLint and diff inspection. No tests were added or run. Browser interaction, delayed network responses and production behavior remain unverified.
