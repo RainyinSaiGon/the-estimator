@@ -1,6 +1,8 @@
 "use client";
 
 import { useState, type FormEvent } from "react";
+import { DeliverySchedulePanel } from "../../../components/delivery-schedule";
+import { ScopeChangeDecisions } from "../../../components/scope-change-decisions";
 import type {
   ClientRequest,
   CompanyMember,
@@ -27,6 +29,7 @@ export function CommitmentTrackingPanel({
   ) => Promise<WorkspaceResponse | undefined>;
 }) {
   const baseline = request.baselines.at(-1);
+  const editable = canEdit && !(request.delivery ?? []).some(outcome => outcome.status !== "rejected");
   const packages = baseline?.review.workPackages ?? [];
   const [tasks, setTasks] = useState<RequestTaskTracking[]>(() =>
     packages.map(
@@ -112,7 +115,7 @@ export function CommitmentTrackingPanel({
           <p className="mt-2 break-all font-mono">SHA-256 {baseline.sha256}</p>
         </details>
       </div>
-      {!canEdit && (
+      {!editable && (
         <p className="mb-4 rounded-lg bg-estimator-paper p-3 text-xs text-estimator-muted">
           Your role can view this commitment but cannot change tracking.
         </p>
@@ -141,7 +144,7 @@ export function CommitmentTrackingPanel({
                   <select
                     className={input}
                     value={tracking.status}
-                    disabled={busy || !canEdit}
+                    disabled={busy || !editable}
                     onChange={(event) =>
                       updateTask(item.id, {
                         status: event.target.value as RequestTaskTracking["status"],
@@ -158,7 +161,7 @@ export function CommitmentTrackingPanel({
                   <select
                     className={input}
                     value={tracking.assignee}
-                    disabled={busy || !canEdit}
+                    disabled={busy || !editable}
                     onChange={(event) => updateTask(item.id, { assignee: event.target.value })}
                   >
                     <option value="">Unassigned</option>
@@ -174,7 +177,7 @@ export function CommitmentTrackingPanel({
                     className={input}
                     type="date"
                     value={tracking.plannedStart}
-                    disabled={busy || !canEdit}
+                    disabled={busy || !editable}
                     onChange={(event) => updateTask(item.id, { plannedStart: event.target.value })}
                   />
                 </Field>
@@ -183,7 +186,7 @@ export function CommitmentTrackingPanel({
                     className={input}
                     type="date"
                     value={tracking.plannedEnd}
-                    disabled={busy || !canEdit}
+                    disabled={busy || !editable}
                     onChange={(event) => updateTask(item.id, { plannedEnd: event.target.value })}
                   />
                 </Field>
@@ -196,7 +199,7 @@ export function CommitmentTrackingPanel({
                     required
                     maxLength={1000}
                     value={tracking.blocker}
-                    disabled={busy || !canEdit}
+                    disabled={busy || !editable}
                     onChange={(event) => updateTask(item.id, { blocker: event.target.value })}
                     placeholder="Describe what is blocking progress and who can resolve it."
                   />
@@ -208,7 +211,7 @@ export function CommitmentTrackingPanel({
                   <button
                     type="button"
                     className="text-xs font-medium underline"
-                    disabled={busy || !canEdit || tracking.milestones.length >= 20}
+                    disabled={busy || !editable || tracking.milestones.length >= 20}
                     onClick={() =>
                       updateTask(item.id, {
                         milestones: [
@@ -236,7 +239,7 @@ export function CommitmentTrackingPanel({
                           required
                           maxLength={160}
                           value={milestone.title}
-                          disabled={busy || !canEdit}
+                          disabled={busy || !editable}
                           onChange={(event) =>
                             updateTask(item.id, {
                               milestones: tracking.milestones.map((value) =>
@@ -254,7 +257,7 @@ export function CommitmentTrackingPanel({
                           className={input}
                           type="date"
                           value={milestone.dueDate}
-                          disabled={busy || !canEdit}
+                          disabled={busy || !editable}
                           onChange={(event) =>
                             updateTask(item.id, {
                               milestones: tracking.milestones.map((value) =>
@@ -270,7 +273,7 @@ export function CommitmentTrackingPanel({
                         <select
                           className={input}
                           value={milestone.status}
-                          disabled={busy || !canEdit}
+                          disabled={busy || !editable}
                           onChange={(event) =>
                             updateTask(item.id, {
                               milestones: tracking.milestones.map((value) =>
@@ -291,7 +294,7 @@ export function CommitmentTrackingPanel({
                       <button
                         type="button"
                         className="mb-2 text-xs text-red-800 underline"
-                        disabled={busy || !canEdit}
+                        disabled={busy || !editable}
                         onClick={() =>
                           updateTask(item.id, {
                             milestones: tracking.milestones.filter(
@@ -310,13 +313,13 @@ export function CommitmentTrackingPanel({
           );
         })}
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <button className={button} disabled={busy || !canEdit || !packages.length}>
+          <button className={button} disabled={busy || !editable || !packages.length}>
             Save task tracking
           </button>
           <button
             type="button"
             className={secondary}
-            disabled={busy || !canEdit}
+            disabled={busy || !editable}
             onClick={() => setScopeChangeOpen((value) => !value)}
           >
             {scopeChangeOpen ? "Cancel scope change" : "Log a scope change"}
@@ -371,32 +374,21 @@ export function CommitmentTrackingPanel({
           </div>
         )}
       </form>
-      {!!request.scopeChanges?.length && (
-        <div className="mt-6">
-          <h3 className="text-sm font-semibold">Scope change log</h3>
-          <div className="mt-2 space-y-2">
-            {request.scopeChanges.map((item) => (
-              <article
-                key={item.id}
-                className="rounded-xl border border-amber-200 bg-amber-50/50 p-3 text-sm"
-              >
-                <div className="flex flex-wrap justify-between gap-2">
-                  <strong>{item.description}</strong>
-                  <span className="text-xs text-estimator-muted">
-                    {item.status} · {new Date(item.createdAt).toLocaleString()} · {item.createdBy}
-                  </span>
-                </div>
-                <p className="mt-1 text-xs leading-5">
-                  <strong>Reason:</strong> {item.reason}
-                </p>
-                <p className="mt-1 text-xs leading-5">
-                  <strong>Effort impact:</strong> {item.effortImpact}
-                </p>
-              </article>
-            ))}
-          </div>
-        </div>
-      )}
+      <div className="mt-6"><DeliverySchedulePanel
+        key={request.id + ":" + (request.schedule?.plannedAt ?? "new")}
+        work={packages.map((item, index) => ({ id: item.id, title: item.title, owner: item.owner, hours: estimate.tasks[index]?.adjustedHours ?? estimate.tasks[index]?.baseHours ?? 0 }))}
+        members={members.map(member => ({ id: member.userId, label: member.displayName }))}
+        schedule={request.schedule}
+        busy={busy}
+        canEdit={canEdit && !(request.delivery ?? []).some(outcome => outcome.status !== "rejected")}
+        onSave={schedule => onSave({ action: "saveSchedule", requestId: request.id, expectedVersion: request.version, schedule }, "Delivery dates planned using declared availability.")}
+        onApply={async () => {
+          const next = await onSave({ action: "applySchedule", requestId: request.id, expectedVersion: request.version }, "Scheduled dates applied to task tracking.");
+          const saved = next?.company?.requests.find(item => item.id === request.id);
+          if (saved) setTasks(current => current.map(task => { const updated = saved.taskTracking?.find(item => item.workPackageId === task.workPackageId); return updated ? { ...task, assignee: updated.assignee, plannedStart: updated.plannedStart, plannedEnd: updated.plannedEnd } : task; }));
+        }}
+      /></div>
+      {!!request.scopeChanges?.length && <div className="mt-6"><h3 className="mb-3 text-sm font-semibold">Scope change decisions</h3><ScopeChangeDecisions changes={request.scopeChanges} canReview={editable} busy={busy} onReview={(changeId, decision, notes) => onSave({ action: "reviewScopeChange", requestId: request.id, expectedVersion: request.version, changeId, decision, notes }, "Scope change decision recorded. The original baseline stays fixed.")} /></div>}
     </Section>
   );
 }

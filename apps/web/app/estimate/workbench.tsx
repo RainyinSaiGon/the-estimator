@@ -115,7 +115,7 @@ async function fileContentBase64(file: File) {
   return btoa(chunks.join(""));
 }
 
-export default function EstimateWorkbench({ identityEnabled = false, account = null, initialReviewRecordId = "", initialSample = false }: { identityEnabled?: boolean; account?: IdentityAccount | null; initialReviewRecordId?: string; initialSample?: boolean }) {
+export default function EstimateWorkbench({ identityEnabled = false, account = null, initialReviewRecordId = "", initialSample = false, runSampleWithAi = false }: { identityEnabled?: boolean; account?: IdentityAccount | null; initialReviewRecordId?: string; initialSample?: boolean; runSampleWithAi?: boolean }) {
   const router = useRouter();
   const [brief, setBrief] = useState(initialSample ? sampleBrief : "");
   const [file, setFile] = useState<File | null>(null);
@@ -127,6 +127,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [reviewConfirmed, setReviewConfirmed] = useState(false);
   const [busy, setBusy] = useState<"analyze" | "estimate" | "save" | null>(null);
   const [error, setError] = useState("");
+  const [errorReference, setErrorReference] = useState("");
+  const [errorRetryable, setErrorRetryable] = useState(false);
   const [recordTitle, setRecordTitle] = useState("");
   const [recordStatus, setRecordStatus] = useState<PrivateRecordStatus | null>(null);
   const [savedRecords, setSavedRecords] = useState<PrivateRecordSummary[]>([]);
@@ -138,6 +140,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   const [sourceHighlightMessage, setSourceHighlightMessage] = useState("");
   const sourceDetailsRef = useRef<HTMLDetailsElement | null>(null);
   const firstSourceMarkRef = useRef<HTMLElement | null>(null);
+  const analysisControllerRef = useRef<AbortController | null>(null);
+  const analysisGenerationRef = useRef(0);
+  const sampleRunStartedRef = useRef(false);
+  const lastAnalysisInputRef = useRef<{ brief: string; file: File | null; capabilities: string[] } | null>(null);
   const [activeRecordId, setActiveRecordId] = useState<string | null>(null);
   const [activeSnapshot, setActiveSnapshot] = useState<PrivateRecordSnapshot | null>(null);
   const [actualHours, setActualHours] = useState<Record<string, string>>({});
@@ -159,6 +165,10 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   }
 
   function clearReview() {
+    analysisGenerationRef.current += 1;
+    analysisControllerRef.current?.abort();
+    analysisControllerRef.current = null;
+    setBusy((current) => current === "analyze" ? null : current);
     setScope(null);
     setSuggestedScope(null);
     setEstimate(null);
@@ -169,6 +179,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setActiveRecordId(null);
     setActiveSnapshot(null);
     setError("");
+    setErrorReference("");
+    setErrorRetryable(false);
   }
 
   const refreshSavedRecords = useCallback(async () => {
@@ -263,10 +275,18 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setError("");
   }
 
-  async function analyze(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const analyzeSource = useCallback(async (sourceBrief: string, sourceFile: File | null, capabilities: string[]) => {
+    analysisControllerRef.current?.abort();
+    const controller = new AbortController();
+    analysisControllerRef.current = controller;
+    const generation = ++analysisGenerationRef.current;
+    lastAnalysisInputRef.current = { brief: sourceBrief, file: sourceFile, capabilities };
     setBusy("analyze");
+    setScope(null);
+    setSuggestedScope(null);
     setError("");
+    setErrorReference("");
+    setErrorRetryable(false);
     setEstimate(null);
     setOriginalFileDownload(null);
     setSourceHighlightRanges([]);
@@ -274,37 +294,74 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
     setReviewConfirmed(false);
     setActiveRecordId(null);
     setActiveSnapshot(null);
-    const capabilities = capabilityText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    let requestId = "";
+    let retryable = true;
     try {
       let body: BodyInit;
       const headers: Record<string, string> = {};
-      if (file) {
+      if (sourceFile) {
         const form = new FormData();
-        form.append("file", file);
+        form.append("file", sourceFile);
         form.append("parser", parser);
         form.append("capabilities", JSON.stringify(capabilities));
         body = form;
       } else {
         headers["content-type"] = "application/json";
-        body = JSON.stringify({ brief, parser, capabilities });
+        body = JSON.stringify({ brief: sourceBrief, parser, capabilities });
       }
-      const response = await fetch("/api/v1/preview", { method: "POST", headers, body });
-      const payload = await response.json() as { scope?: Scope; error?: string };
+      const response = await fetch("/api/v1/preview", { method: "POST", headers, body, signal: controller.signal });
+      requestId = response.headers.get("x-request-id") ?? "";
+      const payload = await response.json() as { scope?: Scope; error?: string; retryable?: boolean; requestId?: string };
+      requestId ||= payload.requestId ?? "";
+      retryable = payload.retryable ?? response.status >= 500;
       if (!response.ok || !payload.scope) throw new Error(payload.error ?? "The request could not be analyzed.");
+      if (generation !== analysisGenerationRef.current) return;
       setScope(payload.scope);
       setSuggestedScope(payload.scope);
       setRecordTitle(payload.scope.summary.replace(/\s+/g, " ").trim().slice(0, 200));
     } catch (cause) {
+      if (controller.signal.aborted || generation !== analysisGenerationRef.current) return;
       setError(cause instanceof Error ? cause.message : "The request could not be analyzed.");
+      setErrorReference(requestId);
+      setErrorRetryable(retryable);
     } finally {
-      setBusy(null);
+      if (generation === analysisGenerationRef.current) {
+        analysisControllerRef.current = null;
+        setBusy(null);
+      }
     }
+  }, [parser]);
+
+  useEffect(() => {
+    if (!runSampleWithAi || sampleRunStartedRef.current) return;
+    sampleRunStartedRef.current = true;
+    void analyzeSource(sampleBrief, null, []);
+  }, [runSampleWithAi, analyzeSource]);
+
+  async function analyze(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const capabilities = capabilityText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean);
+    await analyzeSource(brief, file, capabilities);
+  }
+
+  function analyzeFictionalSample() {
+    setFile(null);
+    setBrief(sampleBrief);
+    clearReview();
+    void analyzeSource(sampleBrief, null, []);
+  }
+
+  function retryAnalysis() {
+    const input = lastAnalysisInputRef.current;
+    if (input) void analyzeSource(input.brief, input.file, input.capabilities);
   }
 
   async function estimateReviewedScope() {
     if (!scope || !reviewConfirmed || scope.requirements.length === 0) return;
     setBusy("estimate");
     setError("");
+    setErrorReference("");
+    setErrorRetryable(false);
     setEstimate(null);
     setActiveRecordId(null);
     setActiveSnapshot(null);
@@ -528,7 +585,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
   return <main className="mx-auto min-h-screen max-w-7xl px-5 py-6 md:px-10">
     <header className="flex items-center justify-between border-b border-[var(--line)] pb-5">
       <Link href="/" className="font-semibold tracking-tight">The Estimator</Link>
-      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Local preview</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
+      <div className="flex items-center gap-4"><span className="text-right text-xs uppercase tracking-[.16em] text-[var(--muted)]">Public AI demo</span>{identityEnabled && (account ? <Link href="/account" className="text-xs underline underline-offset-4">{account.displayName}</Link> : <Link href="/sign-in?returnTo=%2Festimate" className="text-xs underline underline-offset-4">Sign in</Link>)}</div>
     </header>
 
     <div className="grid gap-8 py-8 lg:grid-cols-[minmax(320px,.8fr)_minmax(0,1.2fr)] lg:gap-10">
@@ -553,7 +610,7 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
           <div>
             <div className="mb-2 flex items-center justify-between gap-3">
               <label htmlFor="brief" className="text-sm font-medium">Or paste the request</label>
-              <button type="button" onClick={() => { setFile(null); setBrief(sampleBrief); clearReview(); }} className="text-xs text-[var(--muted)] underline underline-offset-4">Load fictional CRM sample</button>
+              <button type="button" onClick={analyzeFictionalSample} className="text-xs text-[var(--muted)] underline underline-offset-4">Run AI on fictional CRM sample</button>
             </div>
             <textarea id="brief" value={brief} onChange={(event) => { setBrief(event.target.value); clearReview(); }} rows={11} maxLength={20_000} disabled={Boolean(file)} placeholder="Paste the client request here. You can also upload a supported document above." className="w-full resize-y rounded-2xl border border-[var(--line)] bg-white p-4 text-sm leading-6 focus:border-neutral-500 disabled:opacity-50" />
             <div className="mt-2 flex items-center justify-between text-xs text-[var(--muted)]"><span>{file ? "File will be analyzed instead" : "Source is shown alongside extracted findings"}</span><span>{brief.length.toLocaleString()} / 20,000</span></div>
@@ -567,13 +624,26 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
 
           <div role="note" aria-label="AI data and privacy" className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-xs leading-5 text-amber-950"><p className="font-semibold">What AI analysis sends</p><p className="mt-1.5">The Estimator analysis service extracts text from uploaded files. OpenAI receives the request text (extracted text for files), the team capabilities you entered, and the source name and file type. The uploaded file itself is not sent to OpenAI.</p><p className="mt-1.5">Only send client material you are authorized to share with OpenAI. The Estimator does not add analysis to your private workspace automatically. Private saving requires the optional identity and storage services and a sign-in. When enabled, a reviewed estimate you explicitly save is encrypted before storage in your account-scoped workspace and kept for {recordStatus ? `${recordStatus.retentionDays} days` : "the configured retention period"}.</p></div>
 
-          <button disabled={busy !== null || (!file && brief.trim().length < 30)} className="rounded-full bg-[var(--ink)] px-6 py-3 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">{busy === "analyze" ? "Analyzing request…" : scope ? "Analyze again" : "Analyze and review"}</button>
+          <button disabled={busy !== null || (!file && brief.trim().length < 30)} className="rounded-full bg-[var(--ink)] px-6 py-3 text-sm font-medium text-white transition hover:bg-neutral-700 disabled:opacity-50">{busy === "analyze" ? "AI is analyzing…" : scope ? "Analyze again" : "Analyze with AI"}</button>
         </form>
-        {error && <p role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-800">{error}</p>}
+        {busy === "analyze" && <div role="status" aria-live="polite" className="mt-5 rounded-xl border border-[var(--line)] bg-white p-4">
+          <div className="flex items-center gap-3"><span aria-hidden="true" className="size-4 animate-spin rounded-full border-2 border-[var(--line)] border-t-[var(--ink)]" /><p className="text-sm font-medium">AI analysis is in progress</p></div>
+          <p className="mt-2 text-xs leading-5 text-[var(--muted)]">The AI is extracting requested work, checking source evidence, and finding unanswered questions. It will not calculate effort until you review and confirm the scope.</p>
+        </div>}
+        {error && <div role="alert" className="mt-5 rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-900">
+          <p className="font-semibold">The request could not be completed</p><p className="mt-1 leading-6">{error}</p>
+          {errorReference && <p className="mt-2 text-xs text-red-800">Support reference: {errorReference}</p>}
+          {errorRetryable && <button type="button" onClick={retryAnalysis} disabled={busy !== null} className="mt-3 rounded-full border border-red-300 bg-white px-4 py-2 text-xs font-medium text-red-900 disabled:opacity-50">Retry AI analysis</button>}
+        </div>}
       </section>
 
       <section aria-live="polite" className="min-h-[520px] rounded-[2rem] border border-[var(--line)] bg-white p-5 md:p-8">
-        {!scope ? <div className="flex h-full min-h-[460px] flex-col justify-between">
+        {busy === "analyze" && !scope ? <div className="flex h-full min-h-[460px] flex-col items-center justify-center text-center">
+          <span aria-hidden="true" className="grid size-14 place-items-center rounded-full bg-[var(--accent)] text-sm font-semibold text-[var(--ink)]">AI</span>
+          <p className="mt-5 text-xs uppercase tracking-[.2em] text-[var(--muted)]">Live AI analysis</p>
+          <h2 className="mt-3 text-2xl font-medium tracking-tight">Turning the request into reviewable work.</h2>
+          <p className="mt-3 max-w-md text-sm leading-6 text-[var(--muted)]">The analysis service is reviewing the request now. Source-backed tasks and open questions will appear here; you stay in control of the scope.</p>
+        </div> : !scope ? <div className="flex h-full min-h-[460px] flex-col justify-between">
           <div><p className="text-xs uppercase tracking-[.2em] text-[var(--muted)]">02 / Reviewable analysis</p><h2 className="mt-4 text-3xl font-medium tracking-tight">A clearer view of the request.</h2><p className="mt-3 max-w-lg leading-7 text-[var(--muted)]">Analyze the source first. The system will not calculate an estimate until you review and confirm the work items.</p></div>
           <div className="grid grid-cols-2 gap-3">{[["Scope", "Requested work and evidence"], ["Unknowns", "Questions before commitment"], ["Team fit", "Only from a supplied profile"], ["Learning", "Recorded outcomes, not guesses"]].map(([title, description]) => <div key={title} className="rounded-2xl bg-[var(--paper)] p-4"><p className="text-sm font-medium">{title}</p><p className="mt-1 text-xs leading-5 text-[var(--muted)]">{description}</p></div>)}</div>
         </div> : <div>
@@ -597,8 +667,8 @@ export default function EstimateWorkbench({ identityEnabled = false, account = n
           </details>
 
           <section className="mt-6 rounded-2xl bg-[var(--paper)] p-4">
-            <div className="flex items-center justify-between gap-4"><h3 className="text-sm font-medium">Agent harness</h3><span className="text-xs text-[var(--muted)]">{scope.agentRun.elapsedMs ? `${(scope.agentRun.elapsedMs / 1000).toFixed(1)}s` : "local rules"}</span></div>
-            <ol className="mt-3 space-y-3">{scope.agentRun.steps.map((step) => <li key={step.id} className="border-t border-[var(--line)] pt-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium">{step.agent}</p><span className="text-[10px] uppercase tracking-wider text-[var(--muted)]">{step.status}</span></div><p className="mt-1 text-xs leading-5 text-[var(--muted)]">{step.summary}</p></li>)}</ol>
+            <div className="flex items-center justify-between gap-4"><h3 className="text-sm font-medium">How the AI reviewed this request</h3><span className="text-xs text-[var(--muted)]">{scope.agentRun.elapsedMs ? `${(scope.agentRun.elapsedMs / 1000).toFixed(1)} sec` : "sample rules"}</span></div>
+            <ol className="mt-3 space-y-3">{scope.agentRun.steps.map((step) => <li key={step.id} className="border-t border-[var(--line)] pt-3"><div className="flex items-center justify-between gap-3"><p className="text-sm font-medium">{step.agent}</p><span className="text-[10px] uppercase tracking-wider text-[var(--muted)]">{step.status === "complete" ? "Done" : step.status.replaceAll("-", " ")}</span></div><p className="mt-1 text-xs leading-5 text-[var(--muted)]">{step.summary}</p></li>)}</ol>
           </section>
 
           <section className="mt-7">

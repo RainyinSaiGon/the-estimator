@@ -38,14 +38,15 @@ type CompanyTask struct {
 	HighFactor   float64  `json:"highFactor"`
 }
 type CompanyConfig struct {
-	Version         int              `json:"version"`
-	Fields          []IntakeField    `json:"fields"`
-	Products        []CompanyProduct `json:"products"`
-	Tasks           []CompanyTask    `json:"tasks"`
-	Capabilities    []string         `json:"capabilities"`
-	ApprovedDomains []string         `json:"approvedDomains"`
-	RetentionDays   int              `json:"retentionDays"`
-	HoursPerDay     float64          `json:"hoursPerDay"`
+	TaskSizeGuidelineHours float64          `json:"taskSizeGuidelineHours,omitempty"`
+	Version                int              `json:"version"`
+	Fields                 []IntakeField    `json:"fields"`
+	Products               []CompanyProduct `json:"products"`
+	Tasks                  []CompanyTask    `json:"tasks"`
+	Capabilities           []string         `json:"capabilities"`
+	ApprovedDomains        []string         `json:"approvedDomains"`
+	RetentionDays          int              `json:"retentionDays"`
+	HoursPerDay            float64          `json:"hoursPerDay"`
 }
 type CompanyMember struct {
 	AccountID string `json:"accountId"`
@@ -105,31 +106,59 @@ type CompanyWorkPackage struct {
 	Evidence     string  `json:"evidence,omitempty"`
 }
 type CompanyTaskTracking struct {
-	BaselineID    string    `json:"baselineId"`
-	WorkPackageID string    `json:"workPackageId"`
-	Status        string    `json:"status"`
-	AssigneeID    string    `json:"assigneeId,omitempty"`
-	PlannedStart  string    `json:"plannedStart,omitempty"`
-	TargetDate    string    `json:"targetDate,omitempty"`
-	Note          string    `json:"note,omitempty"`
-	UpdatedAt     time.Time `json:"updatedAt"`
-	UpdatedBy     string    `json:"updatedBy"`
+	BaselineID    string                 `json:"baselineId"`
+	WorkPackageID string                 `json:"workPackageId"`
+	Status        string                 `json:"status"`
+	AssigneeID    string                 `json:"assigneeId,omitempty"`
+	PlannedStart  string                 `json:"plannedStart,omitempty"`
+	TargetDate    string                 `json:"targetDate,omitempty"`
+	Note          string                 `json:"note,omitempty"`
+	Blocker       string                 `json:"blocker,omitempty"`
+	Milestones    []CompanyTaskMilestone `json:"milestones,omitempty"`
+	UpdatedAt     time.Time              `json:"updatedAt"`
+	UpdatedBy     string                 `json:"updatedBy"`
+}
+type CompanyTaskMilestone struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	DueDate string `json:"dueDate"`
+	Status  string `json:"status"`
+}
+type CompanyQuestionResolution struct {
+	Disposition string `json:"disposition"`
+	Resolution  string `json:"resolution"`
+}
+type CompanyScopeChange struct {
+	ID             string     `json:"id"`
+	BaselineID     string     `json:"baselineId"`
+	BaselineSHA256 string     `json:"baselineSha256"`
+	Description    string     `json:"description"`
+	Reason         string     `json:"reason"`
+	EffortImpact   string     `json:"effortImpact"`
+	CreatedBy      string     `json:"createdBy"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	Status         string     `json:"status"`
+	ReviewedBy     string     `json:"reviewedBy,omitempty"`
+	ReviewedAt     *time.Time `json:"reviewedAt,omitempty"`
+	ReviewNotes    string     `json:"reviewNotes,omitempty"`
 }
 type CompanyReview struct {
-	ConfigVersion             int                  `json:"configVersion"`
-	SourceLimitationsAccepted bool                 `json:"sourceLimitationsAccepted"`
-	RequestType               string               `json:"requestType"`
-	ProductID                 string               `json:"productId"`
-	Fields                    map[string]any       `json:"fields"`
-	Deliverables              string               `json:"deliverables"`
-	Exclusions                string               `json:"exclusions"`
-	Acceptance                string               `json:"acceptance"`
-	Dependencies              string               `json:"dependencies"`
-	Questions                 []string             `json:"questions"`
-	WorkPackages              []CompanyWorkPackage `json:"workPackages"`
-	Confirmed                 bool                 `json:"confirmed"`
-	ConfirmedBy               string               `json:"confirmedBy"`
-	ConfirmedAt               *time.Time           `json:"confirmedAt,omitempty"`
+	ConfigVersion             int                                  `json:"configVersion"`
+	SourceLimitationsAccepted bool                                 `json:"sourceLimitationsAccepted"`
+	RequestType               string                               `json:"requestType"`
+	ProductID                 string                               `json:"productId"`
+	Fields                    map[string]any                       `json:"fields"`
+	Deliverables              string                               `json:"deliverables"`
+	Exclusions                string                               `json:"exclusions"`
+	Acceptance                string                               `json:"acceptance"`
+	Dependencies              string                               `json:"dependencies"`
+	Questions                 []string                             `json:"questions"`
+	QuestionResolutions       map[string]CompanyQuestionResolution `json:"questionResolutions,omitempty"`
+	ConflictResolutions       map[string]CompanyQuestionResolution `json:"conflictResolutions,omitempty"`
+	WorkPackages              []CompanyWorkPackage                 `json:"workPackages"`
+	Confirmed                 bool                                 `json:"confirmed"`
+	ConfirmedBy               string                               `json:"confirmedBy"`
+	ConfirmedAt               *time.Time                           `json:"confirmedAt,omitempty"`
 }
 type CompanyEstimateTask struct {
 	Category     string   `json:"category"`
@@ -194,6 +223,8 @@ type CompanyRequest struct {
 	Estimate         *CompanyEstimate      `json:"estimate,omitempty"`
 	Baselines        []CompanyBaseline     `json:"baselines"`
 	Tracking         []CompanyTaskTracking `json:"tracking,omitempty"`
+	ScopeChanges     []CompanyScopeChange  `json:"scopeChanges,omitempty"`
+	Schedule         *DeliverySchedule     `json:"schedule,omitempty"`
 	Delivery         *deliveryOutcome      `json:"deliveryOutcome,omitempty"`
 	DeliveryHistory  []deliveryOutcome     `json:"deliveryHistory,omitempty"`
 }
@@ -224,46 +255,51 @@ type WorkflowCompany struct {
 	Role                string              `json:"role,omitempty"`
 }
 type companyAction struct {
-	Automatic            bool                `json:"automatic"`
-	StaffCount           float64             `json:"staffCount"`
-	DependencyDays       float64             `json:"dependencyDays"`
-	StartDate            string              `json:"startDate"`
-	WorkPackageID        string              `json:"workPackageId"`
-	TrackingStatus       string              `json:"status"`
-	AssigneeID           string              `json:"assigneeId"`
-	PlannedStart         string              `json:"plannedStart"`
-	TargetDate           string              `json:"targetDate"`
-	Action               string              `json:"action"`
-	ExpectedVersion      int64               `json:"expectedVersion"`
-	ExpectedRevision     int                 `json:"expectedRevision"`
-	RequestID            string              `json:"requestId"`
-	Title                string              `json:"title"`
-	Text                 string              `json:"text"`
-	Channel              string              `json:"channel"`
-	ExternalID           string              `json:"externalId"`
-	SourceIDs            []string            `json:"sourceIds"`
-	Attachments          []CompanyAttachment `json:"attachments"`
-	Config               CompanyConfig       `json:"config"`
-	AccountID            string              `json:"accountId"`
-	Role                 string              `json:"role"`
-	Document             KnowledgeDocument   `json:"document"`
-	DocumentID           string              `json:"documentId"`
-	Decision             string              `json:"decision"`
-	Note                 string              `json:"note"`
-	Analysis             json.RawMessage     `json:"analysis"`
-	Knowledge            []KnowledgePassage  `json:"knowledge"`
-	Review               CompanyReview       `json:"review"`
-	BaselineID           string              `json:"baselineId"`
-	ReviewerID           string              `json:"reviewerId"`
-	ActualHours          map[string]float64  `json:"actualHours"`
-	AdditionalScopeHours float64             `json:"additionalScopeHours"`
-	CompletedAt          time.Time           `json:"completedAt"`
-	EvidenceSource       string              `json:"evidenceSource"`
-	EvidenceReference    string              `json:"evidenceReference"`
-	Synthetic            bool                `json:"synthetic"`
-	Secrets              map[string]string   `json:"secrets"`
-	Query                string              `json:"query"`
-	Error                string              `json:"error"`
+	Schedule             DeliveryScheduleInput  `json:"schedule"`
+	Milestones           []CompanyTaskMilestone `json:"milestones"`
+	Blocker              string                 `json:"blocker"`
+	ChangeID             string                 `json:"changeId"`
+	ScopeChange          CompanyScopeChange     `json:"scopeChange"`
+	Automatic            bool                   `json:"automatic"`
+	StaffCount           float64                `json:"staffCount"`
+	DependencyDays       float64                `json:"dependencyDays"`
+	StartDate            string                 `json:"startDate"`
+	WorkPackageID        string                 `json:"workPackageId"`
+	TrackingStatus       string                 `json:"status"`
+	AssigneeID           string                 `json:"assigneeId"`
+	PlannedStart         string                 `json:"plannedStart"`
+	TargetDate           string                 `json:"targetDate"`
+	Action               string                 `json:"action"`
+	ExpectedVersion      int64                  `json:"expectedVersion"`
+	ExpectedRevision     int                    `json:"expectedRevision"`
+	RequestID            string                 `json:"requestId"`
+	Title                string                 `json:"title"`
+	Text                 string                 `json:"text"`
+	Channel              string                 `json:"channel"`
+	ExternalID           string                 `json:"externalId"`
+	SourceIDs            []string               `json:"sourceIds"`
+	Attachments          []CompanyAttachment    `json:"attachments"`
+	Config               CompanyConfig          `json:"config"`
+	AccountID            string                 `json:"accountId"`
+	Role                 string                 `json:"role"`
+	Document             KnowledgeDocument      `json:"document"`
+	DocumentID           string                 `json:"documentId"`
+	Decision             string                 `json:"decision"`
+	Note                 string                 `json:"note"`
+	Analysis             json.RawMessage        `json:"analysis"`
+	Knowledge            []KnowledgePassage     `json:"knowledge"`
+	Review               CompanyReview          `json:"review"`
+	BaselineID           string                 `json:"baselineId"`
+	ReviewerID           string                 `json:"reviewerId"`
+	ActualHours          map[string]float64     `json:"actualHours"`
+	AdditionalScopeHours float64                `json:"additionalScopeHours"`
+	CompletedAt          time.Time              `json:"completedAt"`
+	EvidenceSource       string                 `json:"evidenceSource"`
+	EvidenceReference    string                 `json:"evidenceReference"`
+	Synthetic            bool                   `json:"synthetic"`
+	Secrets              map[string]string      `json:"secrets"`
+	Query                string                 `json:"query"`
+	Error                string                 `json:"error"`
 }
 type workflowFailure struct {
 	status  int
@@ -303,6 +339,9 @@ func companyDefaults() CompanyConfig {
 	}, Products: []CompanyProduct{}, Tasks: []CompanyTask{}, Capabilities: []string{}, ApprovedDomains: []string{}, RetentionDays: 90, HoursPerDay: 6}
 }
 func validateCompanyConfig(c CompanyConfig) error {
+	if math.IsNaN(c.TaskSizeGuidelineHours) || math.IsInf(c.TaskSizeGuidelineHours, 0) || c.TaskSizeGuidelineHours < 0 || c.TaskSizeGuidelineHours > 10000 {
+		return workflowBad("Enter a valid task sizing guideline.")
+	}
 	if len(c.Fields) > 60 || len(c.Products) > 30 || len(c.Tasks) > 80 || len(c.ApprovedDomains) > 30 || len(c.Capabilities) > 50 || c.RetentionDays < 1 || c.RetentionDays > 3650 || c.HoursPerDay <= 0 || c.HoursPerDay > 24 {
 		return workflowBad("Configuration exceeds supported limits.")
 	}

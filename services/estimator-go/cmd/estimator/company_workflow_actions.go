@@ -413,6 +413,9 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		request.Estimate = nil
 		request.Revision++
 	case "estimate":
+		if err := validateCompanyReviewDecisions(request.Review, *request); err != nil {
+			return "", err
+		}
 		if !currentRequestKnowledge(c, request) {
 			return "", workflowBad("Knowledge changed after analysis. Analyze again before calculating effort.")
 		}
@@ -441,6 +444,9 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		request.Estimate = &estimate
 		request.Status = "estimated"
 	case "freeze":
+		if err := validateCompanyReviewDecisions(request.Review, *request); err != nil {
+			return "", err
+		}
 		if !currentRequestKnowledge(c, request) {
 			return "", workflowBad("Knowledge changed after analysis. Analyze again before freezing.")
 		}
@@ -467,7 +473,15 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 			})
 		}
 		request.Status = "frozen"
+	case "schedule.plan", "schedule.apply", "scope_change.propose", "scope_change.review":
+		if !workflowRole(role, "admin", "member") {
+			return "", workflowFailure{403, "Only an estimator or administrator can change delivery plans or scope decisions."}
+		}
+		return store.applyCompanyCommitment(c, request, p.subject, a, now)
 	case "tracking.update":
+		if !workflowRole(role, "admin", "member") {
+			return "", workflowFailure{403, "Only an estimator or administrator can update task tracking."}
+		}
 		if len(request.Baselines) == 0 || request.Status != "frozen" && request.Status != "tracking" {
 			return "", workflowBad("Freeze a reviewed estimate before updating delivery tracking.")
 		}
@@ -506,6 +520,19 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		if len(a.Note) > 1000 || strings.ContainsRune(a.Note, '\x00') {
 			return "", workflowBad("Task progress notes must be 1,000 characters or fewer.")
 		}
+		if len(a.Blocker) > 1000 || (a.TrackingStatus == "blocked" && len(strings.TrimSpace(a.Blocker)) < 3) {
+			return "", workflowBad("Describe the blocker for every blocked task.")
+		}
+		if len(a.Milestones) > 20 {
+			return "", workflowBad("Use no more than 20 milestones per task.")
+		}
+		milestoneIDs := map[string]bool{}
+		for _, milestone := range a.Milestones {
+			if !isUUID(milestone.ID) || milestoneIDs[milestone.ID] || len(strings.TrimSpace(milestone.Title)) < 1 || len(milestone.Title) > 160 || !validWorkDate(milestone.DueDate) || !containsString([]string{"pending", "complete"}, milestone.Status) {
+				return "", workflowBad("Milestones need unique IDs, a title, valid dates, and a progress status.")
+			}
+			milestoneIDs[milestone.ID] = true
+		}
 		if !validWorkDate(a.PlannedStart) || !validWorkDate(a.TargetDate) {
 			return "", workflowBad("Enter valid task dates in YYYY-MM-DD format.")
 		}
@@ -516,6 +543,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 			BaselineID: baseline.ID, WorkPackageID: work.ID, Status: a.TrackingStatus,
 			AssigneeID: a.AssigneeID, PlannedStart: a.PlannedStart, TargetDate: a.TargetDate,
 			Note: strings.TrimSpace(a.Note), UpdatedAt: now, UpdatedBy: p.subject,
+			Blocker: strings.TrimSpace(a.Blocker), Milestones: a.Milestones,
 		}
 		replaced := false
 		for i := range request.Tracking {

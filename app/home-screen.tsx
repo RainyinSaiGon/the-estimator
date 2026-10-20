@@ -20,12 +20,12 @@ export default function HomeScreen({ onNewRequest, onTrySample, onOpenHistory }:
         <h1 id="home-title">Bring clarity to<br />every commitment.</h1>
         <div className={tw("hero-actions")}>
           <button className={tw("button primary")} onClick={onNewRequest}>Start scoping <ArrowUpRight size={17} /></button>
-          <button className={tw("button")} onClick={onTrySample}>Try a fictional brief</button>
+          <button className={tw("button")} onClick={onTrySample}>Run AI on a fictional brief</button>
         </div>
       </div>
       <div className={tw("hero-intro")}>
-        <p>Understand the ask. Make the effort visible. Learn from what delivery actually takes.</p>
-        <p>One workspace for turning rough integration requests into reviewed scopes and explainable estimates.</p>
+        <p>AI turns a rough request into source-backed work items and unanswered questions. You review the scope before effort is calculated.</p>
+        <p>Try the live analysis on a fictional CRM request, then inspect the evidence and planning range yourself.</p>
       </div>
     </section>
 
@@ -45,7 +45,7 @@ export default function HomeScreen({ onNewRequest, onTrySample, onOpenHistory }:
           <span className={tw("section-index")}>0{stage + 1} / {stages[stage].toUpperCase()}</span>
           <h2>{[<>A rough request.<br />A clear way forward.</>, <>Every hour<br />has a reason.</>, <>Experience that<br />stays with you.</>][stage]}</h2>
           <p>{["Find the deliverables, keep the source in sight, and surface the questions that change the work.", "See the work packages, assumptions, and comparable projects behind your planning range.", "Connect actual hours to the agreed scope. Give future estimates a better starting point."][stage]}</p>
-          <button className={tw("text-button")} onClick={() => stage === 2 ? onOpenHistory() : onTrySample()}>{stage === 2 ? "Explore saved estimates" : "Explore the fictional brief"}<ArrowRight size={16} /></button>
+          <button className={tw("text-button")} onClick={() => stage === 2 ? onOpenHistory() : onTrySample()}>{stage === 2 ? "Explore saved estimates" : "See AI review a fictional brief"}<ArrowRight size={16} /></button>
         </div>
         <div className={tw("demo-scene")} aria-label="Illustrative workflow using synthetic data">
           <div className={tw("scene-glow")} aria-hidden="true" />

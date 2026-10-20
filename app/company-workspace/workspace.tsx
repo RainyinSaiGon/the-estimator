@@ -997,7 +997,7 @@ export default function CompanyWorkspace({
                                   </button>
                                 ) : (
                                   <>
-                                    <EstimateTable estimate={request.estimate} />
+                                    <EstimateTable estimate={request.estimate} taskSizeGuidelineHours={company.config.taskSizeGuidelineHours} />
                                     <button
                                       className={button + " mt-4"}
                                       disabled={!canEstimate || !!busy}
@@ -1036,7 +1036,7 @@ export default function CompanyWorkspace({
                                     </span>
                                   </summary>
                                   <div className="mt-4">
-                                    <EstimateTable estimate={base.estimate} />
+                                    <EstimateTable estimate={base.estimate} taskSizeGuidelineHours={base.configuration?.taskSizeGuidelineHours} />
                                   </div>
                                   <details className="mt-4 text-xs text-estimator-muted">
                                     <summary className="cursor-pointer">Plan audit details</summary>

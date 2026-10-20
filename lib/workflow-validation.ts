@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { requestTypes } from "./client-workflow-types";
+import { deliveryScheduleInputSchema } from "./delivery-schedule-validation";
 import { BROWSER_DOCUMENT_UPLOAD_POLICY, DOCUMENT_EXTRACTION_LIMITS, DOCUMENT_EXTRACTION_STATUSES } from "./document-extraction-policy";
 
 const requestTypeSchema = z.enum(requestTypes);
@@ -80,6 +81,9 @@ const reviewSchema = z.object({
 });
 
 export const actionSchema = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("saveSchedule"), companyId: z.string().uuid(), requestId: z.string().uuid(), expectedVersion: z.number().int().positive(), schedule: deliveryScheduleInputSchema }),
+  z.object({ action: z.literal("applySchedule"), companyId: z.string().uuid(), requestId: z.string().uuid(), expectedVersion: z.number().int().positive() }),
+  z.object({ action: z.literal("reviewScopeChange"), companyId: z.string().uuid(), requestId: z.string().uuid(), expectedVersion: z.number().int().positive(), changeId: z.string().uuid(), decision: z.enum(["approved", "rejected"]), notes: z.string().trim().min(10).max(2000) }),
   z.object({ action: z.literal("createCompany"), name: z.string().trim().min(2).max(120) }),
   z.object({
     action: z.literal("createRequest"),
@@ -190,6 +194,7 @@ export const actionSchema = z.discriminatedUnion("action", [
     companyId: z.string().uuid(),
     expectedVersion: z.number().int().positive(),
     config: z.object({
+      taskSizeGuidelineHours: z.number().min(1).max(10000).optional(),
       fields: z.array(fieldSchema).max(40),
       products: z.array(productSchema).max(30),
       capabilities: z.array(z.string().trim().min(1).max(120)).max(60),
