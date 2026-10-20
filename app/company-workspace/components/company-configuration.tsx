@@ -18,6 +18,7 @@ export function ConfigurationPanel({
   const [fields, setFields] = useState(company.config.fields);
   const [products, setProducts] = useState(company.config.products);
   const [tasks, setTasks] = useState(company.config.tasks);
+  const [taskSizeGuidelineHours, setTaskSizeGuidelineHours] = useState(company.config.taskSizeGuidelineHours ?? 16);
   const [capabilities, setCapabilities] = useState(company.config.capabilities.join("\n"));
   const activeRequests = company.requests.filter((request) => request.status !== "frozen");
 
@@ -35,6 +36,7 @@ export function ConfigurationPanel({
       fields,
       products,
       tasks,
+      taskSizeGuidelineHours,
       capabilities: capabilities
         .split("\n")
         .map((item) => item.trim())
@@ -57,6 +59,7 @@ export function ConfigurationPanel({
           disabled={busy || company.role !== "admin"}
           className="space-y-5 disabled:opacity-75"
         >
+          <Field name="Task sizing guideline (central effort hours)"><input type="number" min="1" max="10000" className={input} value={taskSizeGuidelineHours} onChange={event => setTaskSizeGuidelineHours(Number(event.target.value))} /><span className="mt-1 block text-xs text-estimator-muted">Suggest splitting larger tasks during effort review. This is guidance for your company and does not block approval.</span></Field>
           <section className="rounded-2xl border border-estimator-line bg-estimator-canvas/70 p-4 sm:p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>

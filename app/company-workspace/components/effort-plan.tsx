@@ -3,7 +3,7 @@
 import type { ClientRequest } from "../../../lib/client-workflow-types";
 import { Metric } from "../ui";
 
-export function EstimateTable({ estimate }: { estimate: NonNullable<ClientRequest["estimate"]> }) {
+export function EstimateTable({ estimate, taskSizeGuidelineHours = 16 }: { estimate: NonNullable<ClientRequest["estimate"]>; taskSizeGuidelineHours?: number }) {
   const summary = estimate.calibrationSummary;
   const priorLow = estimate.lowHours;
   const priorHigh = estimate.highHours;
@@ -50,6 +50,7 @@ export function EstimateTable({ estimate }: { estimate: NonNullable<ClientReques
                 <tr className="border-t border-[var(--line)]" key={`${task.templateId}-${index}`}>
                   <td className="min-w-60 p-3">
                     <strong>{task.label}</strong>
+                    {(task.adjustedHours ?? task.baseHours) > taskSizeGuidelineHours && <p className="mt-1 text-xs text-amber-900">Above your {taskSizeGuidelineHours} h sizing guideline. Consider splitting this task before commitment.</p>}
                     <ul className="mt-1 text-xs leading-5 text-[var(--muted)]">
                       {task.assumptions.map((item) => (
                         <li key={item}>{item}</li>

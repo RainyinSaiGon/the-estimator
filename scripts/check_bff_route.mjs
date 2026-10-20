@@ -148,7 +148,7 @@ await collect(
   await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief })), makeOptions(async () =>
     Response.json({ detail: "Service request timed out." }, { status: 504 }),
   )),
-  503,
+  504,
 );
 
 await collect(
@@ -177,8 +177,22 @@ await collect(
     async (_url, { signal }) => waitForAbort(signal),
     20,
   )),
-  503,
+  504,
 );
+
+for (const [name, detail, expectedCode, retryable] of [
+  ["brief-auth-rejected", "The configured AI key was rejected.", "AI_AUTH_REJECTED", false],
+  ["brief-quota-exhausted", "The AI provider quota is exhausted.", "AI_QUOTA_OR_RATE_LIMIT", false],
+  ["brief-rate-limited", "The AI service is rate-limited.", "AI_QUOTA_OR_RATE_LIMIT", true],
+]) {
+  const response = await handlePreviewRequest(makeRequest(JSON.stringify({ brief: sampleBrief, parser: "ai" })), makeOptions(async () => Response.json({ detail }, { status: 503 })));
+  assert.equal(response.status, 503);
+  const body = await response.json();
+  assert.equal(body.code, expectedCode);
+  assert.equal(body.retryable, retryable);
+  assert.equal(body.requestId, "00000000-0000-4000-8000-000000000001");
+  results.push({ name, status: response.status, body });
+}
 
 const estimateBody = JSON.stringify({ reviewConfirmed: true, scope });
 const estimateCalls = [];

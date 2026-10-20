@@ -169,6 +169,16 @@
                 }
               }
             }
+          },
+          "504": {
+            "description": "The upstream analysis or estimation service timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
           }
         }
       }
@@ -549,6 +559,16 @@
           },
           "503": {
             "description": "Estimator service is unavailable or timed out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BFFError"
+                }
+              }
+            }
+          },
+          "504": {
+            "description": "The upstream analysis or estimation service timed out.",
             "content": {
               "application/json": {
                 "schema": {
@@ -2380,6 +2400,26 @@
                 }
               }
             ]
+          },
+          "code": {
+            "type": "string",
+            "enum": [
+              "AI_NOT_CONFIGURED",
+              "AI_AUTH_REJECTED",
+              "AI_PERMISSION_DENIED",
+              "AI_QUOTA_OR_RATE_LIMIT",
+              "AI_TIMEOUT",
+              "AI_UPSTREAM_ERROR",
+              "ANALYSIS_NO_WORK_ITEMS",
+              "ESTIMATE_UNAVAILABLE"
+            ]
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "requestId": {
+            "type": "string",
+            "maxLength": 100
           }
         },
         "required": [

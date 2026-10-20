@@ -9,6 +9,7 @@ import { declareDeliverySplit } from "./workflow-evaluation";
 import { protectCredential, requireCompanyRole, textDigest } from "./workflow-governance";
 import { makeEstimate, scopeReadinessBlockers } from "./workflow-planning";
 import { drainR2ObjectCleanup } from "./r2-object-cleanup";
+import { planDeliverySchedule } from "./delivery-schedule";
 import type { actionSchema } from "./workflow-validation";
 import {
   createCompanyRecord,
@@ -60,6 +61,9 @@ export const commandRolePolicy = {
   estimate: { scope: "company", roles: ["admin", "estimator"] },
   freeze: { scope: "company", roles: ["admin", "estimator"] },
   saveTracking: { scope: "company", roles: ["admin", "estimator"] },
+  saveSchedule: { scope: "company", roles: ["admin", "estimator"] },
+  applySchedule: { scope: "company", roles: ["admin", "estimator"] },
+  reviewScopeChange: { scope: "company", roles: ["admin", "estimator"] },
   deleteRequest: { scope: "company", roles: ["admin", "estimator"] },
   submitDelivery: { scope: "company", roles: ["admin", "estimator"] },
   reviewDelivery: { scope: "company", roles: ["admin", "reviewer"] },
@@ -356,6 +360,7 @@ async function handleSaveTracking(input: CommandInput<"saveTracking">, context: 
     );
   const baseline = request.baselines.at(-1);
   if (!baseline) throw new ClientWorkflowError("This request has no frozen commitment baseline.");
+  if (request.delivery?.some(outcome => outcome.status !== "rejected")) throw new ClientWorkflowError("Delivery has been submitted. Tracking is retained as recorded at delivery.", 409);
   const expectedIds = baseline.review.workPackages.map((item) => item.id);
   const submittedIds = input.taskTracking.map((item) => item.workPackageId);
   if (
@@ -398,7 +403,10 @@ async function handleSaveTracking(input: CommandInput<"saveTracking">, context: 
     scopeChanges.push({
       id: crypto.randomUUID(),
       ...input.scopeChange,
-      createdBy: userName,
+      baselineId: baseline.id,
+      baselineSha256: baseline.sha256,
+      createdBy: actorId,
+      createdName: userName,
       createdAt: at,
       status: "proposed",
     });
@@ -417,6 +425,54 @@ async function handleSaveTracking(input: CommandInput<"saveTracking">, context: 
       ? "commitment.tracking_and_scope_change_saved"
       : "commitment.tracking_saved",
   );
+  return { companyId: company.id };
+}
+
+async function handleSaveSchedule(input: CommandInput<"saveSchedule">, context: CompanyCommandContext): Promise<CommandResult> {
+  const { actorId, at, company } = context;
+  const { request, row } = await ownedRequest(actorId, company.id, input.requestId, input.expectedVersion);
+  const baseline = request.baselines.at(-1);
+  if (request.status !== "frozen" || !baseline) throw new ClientWorkflowError("Commit a plan before calculating delivery dates.");
+  if (request.delivery?.some(outcome => outcome.status !== "rejected")) throw new ClientWorkflowError("Delivery has been submitted. The delivery schedule is retained as recorded.", 409);
+  if (input.schedule.resources.some(resource => !company.members.some(member => member.userId === resource.id))) throw new ClientWorkflowError("Schedule resources must be current company members.");
+  const work = baseline.review.workPackages.map((task, index) => ({ id: task.id, title: task.title, owner: task.owner, hours: baseline.estimate.tasks[index]?.adjustedHours ?? baseline.estimate.tasks[index]?.baseHours ?? NaN }));
+  let result;
+  try { result = planDeliverySchedule(input.schedule, work); } catch (error) { throw new ClientWorkflowError(error instanceof Error ? error.message : "Invalid delivery schedule."); }
+  request.schedule = { ...result, baselineId: baseline.id, baselineSha256: baseline.sha256, input: input.schedule, plannedAt: at, plannedBy: actorId };
+  request.version++; request.updatedAt = at;
+  await saveRequest(company.ownerId, request, row.version, company.id, actorId, "commitment.schedule_saved");
+  return { companyId: company.id };
+}
+
+async function handleReviewScopeChange(input: CommandInput<"reviewScopeChange">, context: CompanyCommandContext): Promise<CommandResult> {
+  const { actorId, userName, at, company } = context;
+  const { request, row } = await ownedRequest(actorId, company.id, input.requestId, input.expectedVersion);
+  const baseline = request.baselines.at(-1);
+  const change = request.scopeChanges?.find(change => change.id === input.changeId);
+  if (!baseline || request.status !== "frozen" || !change || change.status !== "proposed") throw new ClientWorkflowError("This scope change is no longer awaiting a decision.", 409);
+  if ((change.baselineId && change.baselineId !== baseline.id) || (change.baselineSha256 && change.baselineSha256 !== baseline.sha256)) throw new ClientWorkflowError("This scope change belongs to a different commitment baseline.", 409);
+  if (request.delivery?.some(outcome => outcome.status !== "rejected")) throw new ClientWorkflowError("Delivery has been submitted. Scope decisions are retained as recorded.", 409);
+  Object.assign(change, { baselineId: baseline.id, baselineSha256: baseline.sha256, status: input.decision, reviewedBy: actorId, reviewedName: userName, reviewedAt: at, reviewNotes: input.notes });
+  request.version++; request.updatedAt = at;
+  await saveRequest(company.ownerId, request, row.version, company.id, actorId, `commitment.scope_change_${input.decision}`);
+  return { companyId: company.id };
+}
+
+async function handleApplySchedule(input: CommandInput<"applySchedule">, context: CompanyCommandContext): Promise<CommandResult> {
+  const { actorId, at, company } = context;
+  const { request, row } = await ownedRequest(actorId, company.id, input.requestId, input.expectedVersion);
+  const baseline = request.baselines.at(-1), schedule = request.schedule;
+  if (!baseline || !schedule || request.status !== "frozen" || schedule.baselineId !== baseline.id || schedule.baselineSha256 !== baseline.sha256) throw new ClientWorkflowError("Calculate a schedule for the current commitment before applying dates.", 409);
+  if (request.delivery?.some(outcome => outcome.status !== "rejected")) throw new ClientWorkflowError("Delivery has been submitted. Task dates are retained as recorded.", 409);
+  if (schedule.input.resources.some(resource => !company.members.some(member => member.userId === resource.id))) throw new ClientWorkflowError("A scheduled member is no longer in the company. Review availability and replan.");
+  request.taskTracking = baseline.review.workPackages.map(work => {
+    const planned = schedule.tasks.find(task => task.id === work.id);
+    if (!planned) throw new ClientWorkflowError("The schedule does not cover the current frozen tasks. Recalculate it.");
+    const current = request.taskTracking?.find(task => task.workPackageId === work.id);
+    return { workPackageId: work.id, status: "not_started" as const, blocker: "", milestones: [], ...current, assignee: planned.assigneeId, plannedStart: planned.startDate, plannedEnd: planned.endDate };
+  });
+  request.version++; request.updatedAt = at;
+  await saveRequest(company.ownerId, request, row.version, company.id, actorId, "commitment.schedule_applied");
   return { companyId: company.id };
 }
 
@@ -658,6 +714,9 @@ const companyHandlers = {
   estimate: handleEstimate,
   freeze: handleFreeze,
   saveTracking: handleSaveTracking,
+  saveSchedule: handleSaveSchedule,
+  applySchedule: handleApplySchedule,
+  reviewScopeChange: handleReviewScopeChange,
   deleteRequest: handleDeleteRequest,
   submitDelivery: handleDelivery,
   reviewDelivery: handleDelivery,
@@ -689,6 +748,9 @@ export async function executeWorkflowCommand(input: WorkflowCommand, context: Co
     case "estimate": return companyHandlers.estimate(input, companyContext);
     case "freeze": return companyHandlers.freeze(input, companyContext);
     case "saveTracking": return companyHandlers.saveTracking(input, companyContext);
+    case "saveSchedule": return companyHandlers.saveSchedule(input, companyContext);
+    case "applySchedule": return companyHandlers.applySchedule(input, companyContext);
+    case "reviewScopeChange": return companyHandlers.reviewScopeChange(input, companyContext);
     case "deleteRequest": return companyHandlers.deleteRequest(input, companyContext);
     case "submitDelivery": return companyHandlers.submitDelivery(input, companyContext);
     case "reviewDelivery": return companyHandlers.reviewDelivery(input, companyContext);

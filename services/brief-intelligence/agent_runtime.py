@@ -80,6 +80,8 @@ SYSTEM_INSTRUCTIONS = """You are the lead analyst in a client-work scoping harne
 
 Use only evidence found in the source. Every requirement evidence value must be an exact contiguous quote copied from the source. Never infer that the team has a capability unless the profile says so. If no profile was provided, use status unknown. Do not invent effort hours. Assign complexity bands only as rough work-shape classifications. Use estimateMode=integration only for CRM/API/system integration or data import/migration work; otherwise use general.
 
+For integration work, assign each requirement one category from: discovery, authentication, mapping, import, sync, deduplication, testing, handover. Return at most one requirement per integration category. Use discovery only when the request explicitly asks for analysis or requirements clarification. If a detail is unknown, raise a question rather than adding an implied work package. Preserve the requested categories and avoid duplicate items. Suggestions or improvements that the client did not request belong in improvements, never requirements.
+
 Return one JSON object matching the supplied schema exactly. Requirements use id, title, evidence, category, and complexity. Missing-information items use question, reason, and priority. Capability findings use capability, status, evidence, and note. Improvements use title, reason, and priority. initialAnswers contains direction, api, quality, volume, and mapping with only the allowed values from the user input. specialistSummaries must include exactly one concise summary for each of these roles: scope analyst, delivery risk analyst, capability analyst. qualityNotes should state relevant uncertainty or review limits. Do not include hidden reasoning; summaries must be concise conclusions and evidence references."""
 
 
@@ -203,16 +205,22 @@ def run_agent_analysis(
     except ValidationError as error:
         raise ValueError("The agent returned a result that did not match the review schema. Retry the analysis.") from error
     except Exception as error:
-        from openai import APIError, AuthenticationError, PermissionDeniedError, RateLimitError
+        from openai import APIConnectionError, APIError, APITimeoutError, AuthenticationError, PermissionDeniedError, RateLimitError
 
         if isinstance(error, AuthenticationError):
             raise RuntimeError("The configured AI key was rejected. Check its expiry and permissions.") from error
         if isinstance(error, PermissionDeniedError):
             raise RuntimeError("The configured AI key does not have Agents API session and inference permissions.") from error
         if isinstance(error, RateLimitError):
-            raise RuntimeError("The AI service is rate-limited or has no available quota. Retry later or use the sample parser.") from error
+            if getattr(error, "code", None) == "insufficient_quota":
+                raise RuntimeError("The AI provider quota is exhausted. Ask the administrator to check API billing.") from error
+            raise RuntimeError("The AI service is rate-limited. Wait briefly before retrying.") from error
+        if isinstance(error, APITimeoutError):
+            raise RuntimeError("AI analysis timed out before results were ready. Please retry the request.") from error
+        if isinstance(error, APIConnectionError):
+            raise RuntimeError("The AI service could not be reached. Please retry the request.") from error
         if isinstance(error, APIError):
-            raise RuntimeError("The AI agent service could not complete this request. Use the sample parser or retry later.") from error
+            raise RuntimeError("The AI service could not complete this request. Please retry later.") from error
         raise
     finally:
         if session_id:

@@ -172,6 +172,11 @@ func validateCompanyReviewForRequest(config CompanyConfig, r CompanyReview, requ
 	if r.Confirmed && (strings.TrimSpace(r.Deliverables) == "" || strings.TrimSpace(r.Acceptance) == "") {
 		return workflowBad("Confirm deliverables and acceptance criteria before approving scope.")
 	}
+	if r.Confirmed {
+		if err := validateCompanyReviewDecisions(r, request); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func companySplit(id string) string {

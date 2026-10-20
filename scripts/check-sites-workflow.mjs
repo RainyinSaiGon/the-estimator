@@ -175,6 +175,20 @@ try {
   await action({ ...tracking, taskTracking: tracking.taskTracking.map(item => ({ ...item, plannedStart: "2026-02-30" })) }, "qa-owner", 400);
   result = await action(tracking); current = result.company.requests.find(row => row.id === requestId);
   assert.equal(current.baselines[0].sha256, frozenSha); assert.equal(current.taskTracking[0].status, "in_progress"); assert.equal(current.taskTracking[0].assignee, "qa-owner"); assert.equal(current.taskTracking[0].milestones[0].title, "FICTIONAL validation checkpoint"); assert.equal(current.scopeChanges[0].status, "proposed");
+  const scheduleInput = { startDate: "2026-10-23", workingWeekdays: [1,2,3,4,5], holidays: ["2026-10-26"], resources: [{ id: "qa-owner", dailyHours: 6, exceptions: { "2026-10-23": 2 } }], tasks: [{ id: taskId, assigneeId: "qa-owner", dependencyIds: [], notBefore: "", hours: 0 }] };
+  await action({ action: "saveSchedule", requestId, expectedVersion: current.version, schedule: scheduleInput }, "qa-viewer", 403);
+  await action({ action: "saveSchedule", requestId, expectedVersion: current.version, schedule: { ...scheduleInput, resources: [{ ...scheduleInput.resources[0], id: "qa-stranger" }] } }, "qa-owner", 400);
+  const oldTrackingVersion = current.version;
+  result = await action({ action: "saveSchedule", requestId, expectedVersion: current.version, schedule: scheduleInput }); current = result.company.requests.find(row => row.id === requestId);
+  assert.equal(current.schedule.finishDate, "2026-10-28"); assert.equal(current.schedule.tasks[0].effortHours, 10); assert.equal(current.schedule.baselineSha256, frozenSha);
+  result = await action({ action: "applySchedule", requestId, expectedVersion: current.version }); current = result.company.requests.find(row => row.id === requestId);
+  assert.equal(current.taskTracking[0].plannedEnd, "2026-10-28"); assert.equal(current.taskTracking[0].status, "in_progress"); assert.equal(current.taskTracking[0].milestones[0].title, "FICTIONAL validation checkpoint"); assert.equal(current.baselines[0].sha256, frozenSha);
+  await action({ action: "saveSchedule", requestId, expectedVersion: oldTrackingVersion, schedule: scheduleInput }, "qa-owner", 409);
+  const changeId = current.scopeChanges[0].id;
+  await action({ action: "reviewScopeChange", requestId, expectedVersion: current.version, changeId, decision: "approved", notes: "Reviewed this added work as a separate commitment." }, "qa-reviewer", 403);
+  result = await action({ action: "reviewScopeChange", requestId, expectedVersion: current.version, changeId, decision: "approved", notes: "Reviewed this added work as a separate commitment." }); current = result.company.requests.find(row => row.id === requestId);
+  assert.equal(current.scopeChanges[0].reviewedBy, "qa-owner"); assert.equal(current.scopeChanges[0].status, "approved"); assert.equal(current.baselines[0].sha256, frozenSha);
+  await action({ action: "reviewScopeChange", requestId, expectedVersion: current.version, changeId, decision: "rejected", notes: "Attempted to overwrite the recorded decision." }, "qa-owner", 409);
   await action({ action: "deleteRequest", requestId, expectedVersion: current.version }, "qa-owner", 400);
   await action({ action: "saveReview", requestId, expectedVersion: current.version, review: current.review }, "qa-owner", 400);
   const submission = { action: "submitDelivery", requestId, expectedVersion: current.version, actualHours: { [taskId]: 12 }, addedScopeHours: 100, evidence: "FICTIONAL time records and original scope reconciliation for this QA fixture only.", deliveredAt: new Date().toISOString(), originalScopeOnly: true, reviewerId: "qa-owner" };
@@ -255,6 +269,6 @@ try {
   assert.equal(disabledInboundResponse.status, 201, await disabledInboundResponse.clone().text()); const disabledInbound = await disabledInboundResponse.json();
   const disabledWorkspace = await fetch(disabledUrl + "?company=" + publicCompanyId, { headers: { "oai-authenticated-user-id": publicMemberId, "oai-authenticated-user-email": `${publicMemberId}@example.invalid` } }).then(response => response.json());
   assert.equal(disabledWorkspace.company.requests.find(row => row.id === disabledInbound.requestId).cohort, "synthetic");
-  console.log("PASS: roles, tenant/file isolation, CSRF, public demo synthetic cohorts for anonymous and signed-in members, disabled-mode signed webhook cohort enforcement, MCP discovery/scoping/revocation, scope gate, frozen baseline, task actuals, self-review rejection, independent approval, D1-consistent paginated exports, snapshot concurrency cap, private R2 upload, scheduled R2 deletion, signed webhook replay/revocation.");
+  console.log("PASS: roles, tenant/file isolation, CSRF, public demo synthetic cohorts for anonymous and signed-in members, disabled-mode signed webhook cohort enforcement, MCP discovery/scoping/revocation, scope gate, frozen baseline, capacity schedules and tracking handoff, immutable scope-change decisions, task actuals, self-review rejection, independent approval, D1-consistent paginated exports, snapshot concurrency cap, private R2 upload, scheduled R2 deletion, signed webhook replay/revocation.");
 } catch (error) { await new Promise(resolve => setTimeout(resolve, 1000)); console.error(error); console.error(logs.split("\n").filter(line => !/[│├└┌─]/.test(line)).slice(-90).join("\n")); process.exitCode = 1; }
 finally { worker.kill("SIGTERM"); await new Promise(resolve => { worker.once("exit", resolve); setTimeout(resolve, 3000).unref(); }); }

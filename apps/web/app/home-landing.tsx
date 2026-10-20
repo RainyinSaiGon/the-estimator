@@ -20,7 +20,7 @@ export default function HomeLanding({ identityEnabled, displayName }: { identity
 
     <HomeScreen
       onNewRequest={() => router.push("/estimate")}
-      onTrySample={() => router.push("/estimate?sample=1")}
+      onTrySample={() => router.push("/estimate?sample=1&runAi=1")}
       onOpenHistory={() => router.push("/estimate#saved-estimates")}
     />
 

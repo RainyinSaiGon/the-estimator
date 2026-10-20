@@ -2,6 +2,8 @@ import { evaluateReviewDecisions } from "./review-policy.ts";
 import { reviewBlockerMessages } from "./review-policy-messages.ts";
 import type { RequestInboxPage } from "./workflow-query-types";
 import type { ExtractedDocumentUpload } from "./document-extraction-policy";
+import type { DeliverySchedule } from "./delivery-schedule";
+import type { CommitmentChange } from "./commitment-changes";
 
 export const requestTypes = ["demo", "setup", "migration", "integration", "customization", "support"] as const;
 export type RequestType = typeof requestTypes[number];
@@ -19,6 +21,7 @@ export type DeliveryEvaluation = { protocol: string; methodology: string; counts
 export type KnowledgeSource = { id: string; title: string; url: string; text: string; status: "draft" | "approved" | "retired"; sha256: string; addedAt: string; approvedAt?: string; approvedBy?: string; retrievedAt?: string; contentType?: string; truncated?: boolean };
 export type CompanyConfig = {
   version: number;
+  taskSizeGuidelineHours?: number;
   fields: IntakeField[];
   products: Product[];
   capabilities: string[];
@@ -41,7 +44,7 @@ export type ScopeWorkPackage = {
 export type TaskTrackingStatus = "not_started" | "in_progress" | "blocked" | "complete";
 export type TaskMilestone = { id: string; title: string; dueDate: string; status: "pending" | "complete" };
 export type RequestTaskTracking = { workPackageId: string; status: TaskTrackingStatus; assignee: string; plannedStart: string; plannedEnd: string; blocker: string; milestones: TaskMilestone[] };
-export type ScopeChange = { id: string; description: string; reason: string; effortImpact: string; createdBy: string; createdAt: string; status: "proposed" };
+export type ScopeChange = CommitmentChange;
 export type ClientAnalysis = {
   summary: string;
   requestType: RequestType;
@@ -105,6 +108,7 @@ export type ClientRequest = {
   baselines: FrozenBaseline[];
   taskTracking?: RequestTaskTracking[];
   scopeChanges?: ScopeChange[];
+  schedule?: DeliverySchedule;
 };
 export type Company = {
   id: string;

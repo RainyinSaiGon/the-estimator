@@ -14,6 +14,8 @@ type PreviewDependencies = {
   requestId?: string;
 };
 
+type PreviewErrorCode = "AI_NOT_CONFIGURED" | "AI_AUTH_REJECTED" | "AI_PERMISSION_DENIED" | "AI_QUOTA_OR_RATE_LIMIT" | "AI_TIMEOUT" | "AI_UPSTREAM_ERROR" | "ANALYSIS_NO_WORK_ITEMS" | "ESTIMATE_UNAVAILABLE";
+
 type PreviewInput = {
   parser: "sample" | "ai";
   brief?: string;
@@ -21,9 +23,22 @@ type PreviewInput = {
   capabilities: string[];
 };
 
-function errorResponse(error: unknown, status: number) {
+function classifyPreviewError(detail: string, status: number): { code: PreviewErrorCode; retryable: boolean } {
+  const message = detail.toLowerCase();
+  if (status === 504 || message.includes("timed out") || message.includes("timeout")) return { code: "AI_TIMEOUT", retryable: true };
+  if (message.includes("not configured")) return { code: "AI_NOT_CONFIGURED", retryable: false };
+  if (message.includes("key was rejected") || message.includes("authentication")) return { code: "AI_AUTH_REJECTED", retryable: false };
+  if (message.includes("permission") || message.includes("cannot access this model")) return { code: "AI_PERMISSION_DENIED", retryable: false };
+  if (message.includes("quota") || message.includes("usage limit")) return { code: "AI_QUOTA_OR_RATE_LIMIT", retryable: false };
+  if (message.includes("rate limit") || message.includes("rate-limited")) return { code: "AI_QUOTA_OR_RATE_LIMIT", retryable: true };
+  if (message.includes("could not be reached")) return { code: "AI_UPSTREAM_ERROR", retryable: true };
+  return { code: "AI_UPSTREAM_ERROR", retryable: status >= 500 };
+}
+
+function errorResponse(error: unknown, status: number, requestId?: string, code?: PreviewErrorCode) {
   const detail = typeof error === "string" ? error : "The analysis service rejected this request.";
-  return Response.json({ error: detail }, { status });
+  const classified = code ? { code, retryable: code === "AI_TIMEOUT" || code === "AI_UPSTREAM_ERROR" || (code === "ESTIMATE_UNAVAILABLE" && status >= 500) } : classifyPreviewError(detail, status);
+  return Response.json({ error: detail, code: classified.code, retryable: classified.retryable, ...(requestId ? { requestId } : {}) }, { status, headers: { "cache-control": "no-store" } });
 }
 
 function validateCapabilities(value: unknown): string[] | null {
@@ -106,7 +121,7 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
   try {
     const serviceAuthorization = await briefServiceAuthorization(input.file ? "briefs:analyze-document" : "briefs:analyze");
     if (!serviceAuthorization) {
-      return Response.json({ error: "The analysis service is not configured." }, { status: 503, headers: { "cache-control": "no-store" } });
+      return errorResponse("The analysis service is not configured. Ask the demo administrator to configure it.", 503, dependencies.requestId, "AI_NOT_CONFIGURED");
     }
     const timeoutMs = dependencies.timeoutMs ?? configuredPreviewTimeoutMs();
     const briefUrl = dependencies.briefUrl ?? configuredServiceUrl("BRIEF_SERVICE_URL", "http://127.0.0.1:8001").toString().replace(/\/+$/, "");
@@ -136,17 +151,18 @@ export async function handlePreviewRequest(request: Request, dependencies: Previ
     const scopeResponse = await fetchImpl(analyzeUrl, { method: "POST", headers, body: analyzeBody, signal: signalForRemainingTime(), cache: "no-store" });
     const scopeBody = await scopeResponse.json().catch(() => ({})) as Record<string, unknown>;
     if (!scopeResponse.ok) {
-      if (scopeResponse.status === 504) return Response.json({ error: "AI analysis took too long. Please try again." }, { status: 503 });
-      return errorResponse(scopeBody.detail, scopeResponse.status);
+      if (scopeResponse.status === 504) return errorResponse("AI analysis took too long. Please try again.", 504, dependencies.requestId, "AI_TIMEOUT");
+      return errorResponse(scopeBody.detail, scopeResponse.status, dependencies.requestId);
     }
 
     if (!Array.isArray(scopeBody.requirements) || scopeBody.requirements.length === 0) {
-      return Response.json({ error: "No reviewable work items were found in the request." }, { status: 422 });
+      return errorResponse("No reviewable work items were found in the request. Add more detail or try a different source.", 422, dependencies.requestId, "ANALYSIS_NO_WORK_ITEMS");
     }
     return Response.json({ scope: scopeBody }, { headers: { "cache-control": "no-store" } });
   } catch (cause) {
-    const message = cause instanceof Error && cause.name === "TimeoutError" ? "AI analysis took too long. Please try again." : "AI analysis is unavailable. Check the local services and try again.";
-    return Response.json({ error: message }, { status: 503 });
+    const timedOut = cause instanceof Error && cause.name === "TimeoutError";
+    const message = timedOut ? "AI analysis took too long. Please try again." : "AI analysis is temporarily unavailable. Please try again.";
+    return errorResponse(message, timedOut ? 504 : 503, dependencies.requestId, timedOut ? "AI_TIMEOUT" : "AI_UPSTREAM_ERROR");
   }
 }
 
@@ -294,7 +310,7 @@ export async function handleEstimateConfirmation(request: Request, dependencies:
       cache: "no-store",
     });
     const estimateBody = await estimateResponse.json().catch(() => ({})) as Record<string, unknown>;
-    if (!estimateResponse.ok) return errorResponse(estimateBody.error, estimateResponse.status);
+    if (!estimateResponse.ok) return errorResponse(estimateBody.error, estimateResponse.status, dependencies.requestId, "ESTIMATE_UNAVAILABLE");
     return Response.json({ estimate: estimateBody }, { headers: { "cache-control": "no-store" } });
   } catch (cause) {
     const message = cause instanceof Error && cause.name === "TimeoutError" ? "Estimate calculation took too long. Please try again." : "Estimate calculation is unavailable. Check the local services and try again.";

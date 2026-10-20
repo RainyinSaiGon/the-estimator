@@ -169,6 +169,15 @@ def validate_capabilities(values: list[str]) -> list[str]:
     return [item.strip() for item in values]
 
 
+def analysis_error_status(message: str) -> int:
+    normalized = message.lower()
+    if "timed out" in normalized or "timeout" in normalized:
+        return 504
+    if any(term in normalized for term in ("not configured", "key was rejected", "permissions", "usage limit", "quota", "rate-limited", "could not be reached")):
+        return 503
+    return 502
+
+
 def sample_scope(brief: str, team_capabilities: list[str] | None = None) -> dict:
     lines = [part.strip() for part in re.split(r"(?<=[.!?])\s+|\n+", brief) if part.strip()]
 
@@ -268,8 +277,14 @@ def normalize_agent_result(result: dict) -> dict:
             "import": "import", "migration": "import", "sync": "sync", "synchronization": "sync",
             "deduplication": "deduplication", "testing": "testing", "handover": "handover", "discovery": "discovery",
         }
+        unsupported = [item["category"] for item in result["requirements"] if item["category"].strip().lower() not in category_map]
+        if unsupported:
+            raise ValueError("AI analysis returned an unsupported integration work category. Retry the analysis before reviewing scope.")
+        categories = [category_map[item["category"].strip().lower()] for item in result["requirements"]]
+        if len(categories) != len(set(categories)):
+            raise ValueError("AI analysis returned duplicate integration work categories. Retry the analysis before reviewing scope.")
         result["requirements"] = [
-            {"id": category_map.get(item["category"].lower(), "discovery"), "title": item["title"], "evidence": item["evidence"]}
+            {"id": category_map[item["category"].strip().lower()], "title": item["title"], "evidence": item["evidence"]}
             for item in result["requirements"]
         ]
     else:
@@ -320,7 +335,7 @@ def analyze(request: AnalyzeRequest, _service: None = Depends(analysis_service_a
         return result
     except RuntimeError as error:
         message = str(error)
-        status = 503 if "not configured" in message or "permissions" in message else 502
+        status = analysis_error_status(message)
         raise HTTPException(status_code=status, detail=message) from error
     except ValueError as error:
         raise HTTPException(status_code=502, detail=str(error)) from error
@@ -355,7 +370,7 @@ async def analyze_document(
                 str(extracted["extension"]),
             ))
         except (RuntimeError, ValueError) as error:
-            status = 503 if "not configured" in str(error) or "permissions" in str(error) else 502
+            status = analysis_error_status(str(error)) if isinstance(error, RuntimeError) else 502
             raise HTTPException(status_code=status, detail=str(error)) from error
     else:
         raise HTTPException(status_code=422, detail="Choose the sample or AI analysis mode.")
