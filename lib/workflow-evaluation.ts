@@ -1,5 +1,8 @@
 import { isIndependentlyReviewedOriginalScopeOutcome, type ClientRequest, type DeliveryEvaluation, type EvaluationDeclaration, type EvaluationMetrics } from "./client-workflow-types.ts";
 
+/** Minimal immutable record needed by delivery evaluation and reproducible exports. */
+export type DeliveryRecord = Pick<ClientRequest, "id" | "channel" | "cohort" | "createdAt" | "createdBy" | "baselines" | "delivery">;
+
 export async function declareDeliverySplit(companyId: string, requestId: string, cohort: "synthetic" | "recorded", domain: string, at: string): Promise<EvaluationDeclaration> {
   void companyId;
   const bytes = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`the-estimator-delivery-holdout-v1:${requestId}`));
@@ -11,7 +14,7 @@ export function createDeliveryEvaluationAccumulator() {
   const empty = () => ({ n: 0, baseError: 0, adjustedError: 0, bias: 0, adjustedBias: 0, covered: 0, adjustedCovered: 0, domains: {} as Record<string, number> });
   const samples = { recorded: empty(), synthetic: empty() };
   const counts = { frozen: 0, pending: 0, rejected: 0, excluded: 0, training: 0 };
-  function add(request: ClientRequest) {
+  function add(request: DeliveryRecord) {
     if (request.baselines.length) counts.frozen++;
     for (const outcome of request.delivery ?? []) {
       if (outcome.status === "pending") { counts.pending++; continue; }
@@ -52,7 +55,7 @@ export function evaluateDeliveries(requests: ClientRequest[]): DeliveryEvaluatio
   return accumulator.result();
 }
 
-export function exportDeliveryRecords(requests: ClientRequest[]) {
+export function exportDeliveryRecords(requests: DeliveryRecord[]) {
   return requests.map(request => {
     const baseline = request.baselines.at(-1);
     const outcome = request.delivery?.at(-1);

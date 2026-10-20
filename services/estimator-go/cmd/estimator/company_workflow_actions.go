@@ -49,7 +49,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 			if index >= 0 {
 				c.Members = append(c.Members[:index], c.Members[index+1:]...)
 			}
-			_, err := tx.Exec(ctx, "DELETE FROM workflow_members WHERE company_id=$1 AND account_key=$2", c.ID, key)
+			err := store.removeWorkflowMember(ctx, tx, c.ID, key)
 			if c.Gmail.LinkedBy == a.AccountID {
 				c.Gmail = CompanyConnector{Secrets: map[string]string{}}
 			}
@@ -83,7 +83,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		} else {
 			c.Members = append(c.Members, m)
 		}
-		_, err := tx.Exec(ctx, "INSERT INTO workflow_members(company_id,account_key,role) VALUES($1,$2,$3) ON CONFLICT(company_id,account_key) DO UPDATE SET role=EXCLUDED.role", c.ID, key, a.Role)
+		err := store.upsertWorkflowMember(ctx, tx, c.ID, key, a.Role)
 		return a.AccountID, err
 	case "knowledge.add":
 		d := a.Document
@@ -336,7 +336,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 		if role != "admin" {
 			return "", workflowFailure{403, "Administrator required."}
 		}
-		if _, err := tx.Exec(ctx, "DELETE FROM workflow_attachments WHERE company_id=$1 AND request_id=$2", c.ID, request.ID); err != nil {
+		if err := store.deleteWorkflowAttachments(ctx, tx, c.ID, request.ID); err != nil {
 			return "", err
 		}
 		for i, v := range c.Requests {
@@ -589,8 +589,7 @@ func (store *recordStore) applyCompanyAction(ctx context.Context, tx pgx.Tx, c *
 	}
 	request.UpdatedAt = now
 	if tx != nil {
-		_, err := tx.Exec(ctx, "UPDATE workflow_attachments SET expires_at=$1 WHERE company_id=$2 AND request_id=$3", now.Add(time.Duration(c.Config.RetentionDays)*24*time.Hour), c.ID, request.ID)
-		if err != nil {
+		if err := store.updateWorkflowAttachmentExpiry(ctx, tx, c.ID, request.ID, now.Add(time.Duration(c.Config.RetentionDays)*24*time.Hour)); err != nil {
 			return "", err
 		}
 	}

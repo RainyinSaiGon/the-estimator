@@ -41,3 +41,13 @@ export const workflowInbound = sqliteTable("workflow_inbound", {
 export const workflowAudit = sqliteTable("workflow_audit", {
   id: text("id").primaryKey(), companyId: text("company_id").notNull(), requestId: text("request_id").notNull(), actor: text("actor").notNull(), action: text("action").notNull(), createdAt: text("created_at").notNull(),
 }, t => [index("workflow_audit_company").on(t.companyId, t.createdAt)]);
+
+export const workflowExportSnapshots = sqliteTable("workflow_export_snapshots", {
+  id: text("id").primaryKey(), companyId: text("company_id").notNull(), createdAt: text("created_at").notNull(), expiresAt: text("expires_at").notNull(),
+}, t => [index("workflow_export_snapshots_company_expiry").on(t.companyId, t.expiresAt)]);
+export const workflowExportSnapshotItems = sqliteTable("workflow_export_snapshot_items", {
+  snapshotId: text("snapshot_id").notNull(), requestId: text("request_id").notNull(), payload: text("payload").notNull(),
+}, t => [primaryKey({ columns: [t.snapshotId, t.requestId] })]);
+export const workflowObjectDeletions = sqliteTable("workflow_object_deletions", {
+  objectKey: text("object_key").primaryKey(), attempts: integer("attempts").notNull().default(0), availableAt: text("available_at").notNull(), createdAt: text("created_at").notNull(), lastError: text("last_error"),
+}, t => [index("workflow_object_deletions_due").on(t.availableAt, t.createdAt)]);

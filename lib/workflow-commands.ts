@@ -8,6 +8,7 @@ import { ClientWorkflowError } from "./workflow-errors";
 import { declareDeliverySplit } from "./workflow-evaluation";
 import { protectCredential, requireCompanyRole, textDigest } from "./workflow-governance";
 import { makeEstimate, scopeReadinessBlockers } from "./workflow-planning";
+import { drainR2ObjectCleanup } from "./r2-object-cleanup";
 import type { actionSchema } from "./workflow-validation";
 import {
   createCompanyRecord,
@@ -430,18 +431,16 @@ async function handleDeleteRequest(input: CommandInput<"deleteRequest">, context
       "Frozen delivery records cannot be deleted through the workspace. Their baseline and audit history are retained.",
     );
   const bucket = (env as unknown as { BUCKET?: R2Bucket }).BUCKET;
+  const keys = request.attachments
+    .map((file) => file.objectKey)
+    .filter((key): key is string => Boolean(key));
   if (request.attachments.some((file) => file.objectKey) && !bucket)
     throw new ClientWorkflowError(
       "File storage is unavailable. The request was not deleted.",
       503,
     );
-  await deleteRequestRecord(request.id, ownerId, company.id, expectedVersion);
-  if (bucket) {
-    const keys = request.attachments
-      .map((file) => file.objectKey)
-      .filter((key): key is string => Boolean(key));
-    if (keys.length) await bucket.delete(keys);
-  }
+  await deleteRequestRecord(request.id, ownerId, company.id, expectedVersion, actorId, new Date().toISOString(), keys);
+  if (keys.length) await drainR2ObjectCleanup(keys.length).catch(() => undefined);
   return { companyId: company.id };
 }
 

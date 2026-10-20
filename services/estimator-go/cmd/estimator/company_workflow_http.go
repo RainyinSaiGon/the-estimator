@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/jackc/pgx/v5"
 )
 
 func (store *recordStore) workflowPrincipal(w http.ResponseWriter, r *http.Request, scope string) (recordPrincipal, bool) {
@@ -42,18 +44,16 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 		return
 	}
 	if len(parts) == 2 && parts[0] == "context" && isUUID(parts[1]) && r.Method == "GET" {
-		var nonce, ciphertext []byte
-		if store.pool.QueryRow(r.Context(), "SELECT nonce,ciphertext FROM workflow_companies WHERE id=$1", parts[1]).Scan(&nonce, &ciphertext) != nil {
+		company, err := store.readWorkflowCompanyContext(r.Context(), parts[1])
+		if errors.Is(err, pgx.ErrNoRows) {
 			writeJSON(w, 404, map[string]string{"error": "Company not found."})
 			return
 		}
-		raw, e := store.decryptField(parts[1], parts[1], "company", nonce, ciphertext)
-		var c WorkflowCompany
-		if e != nil || json.Unmarshal(raw, &c) != nil {
+		if err != nil {
 			writeJSON(w, 503, map[string]string{"error": "Company context unavailable."})
 			return
 		}
-		writeJSON(w, 200, map[string]any{"gmail": c.Gmail, "webhookSecret": c.WebhookSecret, "webhookActor": c.WebhookActor, "knowledgeTokenHash": c.KnowledgeTokenHash, "knowledgeTokenActor": c.KnowledgeTokenActor})
+		writeJSON(w, 200, map[string]any{"gmail": company.Gmail, "webhookSecret": company.WebhookSecret, "webhookActor": company.WebhookActor, "knowledgeTokenHash": company.KnowledgeTokenHash, "knowledgeTokenActor": company.KnowledgeTokenActor})
 		return
 	}
 	if len(parts) < 1 || parts[0] != "companies" {
@@ -77,12 +77,12 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 		writeJSON(w, 404, map[string]string{"error": "Company not found."})
 		return
 	}
-	tx, err := store.pool.Begin(r.Context())
+	tx, err := store.beginWorkflowTx(r.Context())
 	if err != nil {
 		writeJSON(w, 503, map[string]string{"error": "Company storage unavailable."})
 		return
 	}
-	defer tx.Rollback(r.Context())
+	defer rollbackWorkflowTx(r.Context(), tx)
 	company, role, err := store.loadCompany(r.Context(), tx, companyID, principal, r.Method != "GET")
 	if err != nil {
 		writeJSON(w, 404, map[string]string{"error": "Company not found."})
@@ -111,13 +111,12 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 		case len(parts) == 3 && parts[2] == "schema":
 			writeJSON(w, 200, companyIntakeSchema(company.Config))
 		case len(parts) == 4 && parts[2] == "attachments" && isUUID(parts[3]):
-			var nonce, ciphertext []byte
-			if tx.QueryRow(r.Context(), "SELECT nonce,ciphertext FROM workflow_attachments WHERE id=$1 AND company_id=$2 AND expires_at>now()", parts[3], company.ID).Scan(&nonce, &ciphertext) != nil {
+			raw, err := store.readWorkflowAttachment(r.Context(), tx, company.ID, parts[3])
+			if errors.Is(err, pgx.ErrNoRows) {
 				writeJSON(w, 404, map[string]string{"error": "Attachment not found."})
 				return
 			}
-			raw, e := store.decryptField(company.ID, parts[3], "attachment", nonce, ciphertext)
-			if e != nil {
+			if err != nil {
 				writeJSON(w, 503, map[string]string{"error": "Attachment unavailable."})
 				return
 			}
@@ -134,8 +133,8 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 			writeJSON(w, 403, map[string]string{"error": "An administrator is required."})
 			return
 		}
-		if _, err = tx.Exec(r.Context(), "DELETE FROM workflow_companies WHERE id=$1", company.ID); err == nil {
-			err = tx.Commit(r.Context())
+		if err = store.deleteWorkflowCompany(r.Context(), tx, company.ID); err == nil {
+			err = commitWorkflowTx(r.Context(), tx)
 		}
 		if err != nil {
 			writeJSON(w, 503, map[string]string{"error": "Company deletion failed."})
@@ -180,7 +179,7 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 	}
 	pruneCompany(company, time.Now())
 	if err = store.saveCompany(r.Context(), tx, company); err == nil {
-		err = tx.Commit(r.Context())
+		err = commitWorkflowTx(r.Context(), tx)
 	}
 	if err != nil {
 		writeJSON(w, 503, map[string]string{"error": "Company changes could not be saved."})
@@ -190,31 +189,12 @@ func (store *recordStore) handleCompanyWorkflow(w http.ResponseWriter, r *http.R
 	writeJSON(w, 200, map[string]any{"company": companyView(company), "objectId": objectID})
 }
 func (store *recordStore) listCompanies(w http.ResponseWriter, r *http.Request, p recordPrincipal) {
-	rows, err := store.pool.Query(r.Context(), "SELECT company_id::text FROM workflow_members WHERE account_key=$1 ORDER BY company_id", store.ownerLookupKey(p))
+	companies, err := store.listWorkflowCompanies(r.Context(), p)
 	if err != nil {
 		writeJSON(w, 503, map[string]string{"error": "Companies could not be loaded."})
 		return
 	}
-	ids := []string{}
-	for rows.Next() {
-		var id string
-		_ = rows.Scan(&id)
-		ids = append(ids, id)
-	}
-	rows.Close()
-	result := []map[string]any{}
-	for _, id := range ids {
-		tx, e := store.pool.Begin(r.Context())
-		if e != nil {
-			continue
-		}
-		c, role, e := store.loadCompany(r.Context(), tx, id, p, false)
-		_ = tx.Rollback(r.Context())
-		if e == nil {
-			result = append(result, map[string]any{"id": id, "name": c.Name, "role": role, "version": c.Version})
-		}
-	}
-	writeJSON(w, 200, map[string]any{"companies": result})
+	writeJSON(w, 200, map[string]any{"companies": companies})
 }
 func (store *recordStore) createCompany(w http.ResponseWriter, r *http.Request, p recordPrincipal) {
 	var input struct {
@@ -224,96 +204,23 @@ func (store *recordStore) createCompany(w http.ResponseWriter, r *http.Request, 
 		writeJSON(w, 400, map[string]string{"error": "Enter a company name between 2 and 120 characters."})
 		return
 	}
-	var count int
-	if store.pool.QueryRow(r.Context(), "SELECT count(*) FROM workflow_members WHERE account_key=$1", store.ownerLookupKey(p)).Scan(&count) != nil || count >= 20 {
-		writeJSON(w, 400, map[string]string{"error": "Account company limit reached."})
-		return
-	}
-	id, _ := newUUID()
-	config := companyDefaults()
-	c := WorkflowCompany{ID: id, Name: strings.TrimSpace(input.Name), Version: 1, Config: config, ConfigHistory: []CompanyConfig{config}, Members: []CompanyMember{{p.subject, "admin"}}, Knowledge: []KnowledgeDocument{}, Requests: []CompanyRequest{}, Audit: []CompanyAudit{{time.Now().UTC(), p.subject, "company.created", id}}, Gmail: CompanyConnector{Secrets: map[string]string{}}}
-	raw, _ := json.Marshal(c)
-	nonce, ciphertext, err := store.encryptField(id, id, "company", raw)
+	c, err := store.createWorkflowCompany(r.Context(), p, input.Name)
 	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": "Company could not be created."})
+		var failure workflowFailure
+		if errors.As(err, &failure) {
+			writeJSON(w, failure.status, map[string]string{"error": failure.message})
+		} else {
+			writeJSON(w, 503, map[string]string{"error": "Company could not be created."})
+		}
 		return
 	}
-	tx, err := store.pool.Begin(r.Context())
-	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": "Storage unavailable."})
-		return
-	}
-	defer tx.Rollback(r.Context())
-	_, err = tx.Exec(r.Context(), "INSERT INTO workflow_companies(id,nonce,ciphertext,version) VALUES($1,$2,$3,1)", id, nonce, ciphertext)
-	if err == nil {
-		_, err = tx.Exec(r.Context(), "INSERT INTO workflow_members(company_id,account_key,role) VALUES($1,$2,'admin')", id, store.ownerLookupKey(p))
-	}
-	if err == nil {
-		err = tx.Commit(r.Context())
-	}
-	if err != nil {
-		writeJSON(w, 503, map[string]string{"error": "Company could not be created."})
-		return
-	}
-	c.Role = "admin"
-	writeJSON(w, 201, companyView(&c))
+	writeJSON(w, 201, companyView(c))
 }
 func (store *recordStore) companyJobs(w http.ResponseWriter, r *http.Request) {
-	rows, err := store.pool.Query(r.Context(), "SELECT id::text,nonce,ciphertext FROM workflow_companies ORDER BY updated_at LIMIT 200")
+	jobs, err := store.workflowCompanyJobs(r.Context())
 	if err != nil {
 		writeJSON(w, 503, map[string]string{"error": "Sync jobs unavailable."})
 		return
 	}
-	defer rows.Close()
-	jobs := []map[string]string{}
-	analysisJobs := []map[string]string{}
-	knowledgeJobs := []map[string]string{}
-	for rows.Next() {
-		var id string
-		var nonce, ciphertext []byte
-		if rows.Scan(&id, &nonce, &ciphertext) != nil {
-			continue
-		}
-		raw, e := store.decryptField(id, id, "company", nonce, ciphertext)
-		if e != nil {
-			continue
-		}
-		var c WorkflowCompany
-		if json.Unmarshal(raw, &c) != nil {
-			continue
-		}
-		if c.Gmail.Connected && c.Gmail.LinkedBy != "" && (c.Gmail.LeaseUntil == nil || c.Gmail.LeaseUntil.Before(time.Now())) {
-			jobs = append(jobs, map[string]string{"companyId": id, "accountId": c.Gmail.LinkedBy})
-		}
-		adminID := ""
-		for _, member := range c.Members {
-			if member.Role == "admin" {
-				adminID = member.AccountID
-				break
-			}
-		}
-		for _, source := range c.Knowledge {
-			lastAttempt := source.RetrievedAt
-			if source.LastRefreshAttemptAt != nil {
-				lastAttempt = *source.LastRefreshAttemptAt
-			}
-			if source.Status == "approved" && source.URL != "" && adminID != "" && !lastAttempt.After(time.Now().Add(-30*24*time.Hour)) {
-				knowledgeJobs = append(knowledgeJobs, map[string]string{"companyId": id, "accountId": adminID, "documentId": source.ID})
-			}
-		}
-		for _, request := range c.Requests {
-			activeCreator := false
-			for _, member := range c.Members {
-				if member.AccountID == request.CreatedBy {
-					activeCreator = true
-					break
-				}
-			}
-			due := companyAnalysisDue(request, time.Now())
-			if activeCreator && due && request.CreatedBy != "" && request.UpdatedAt.Add(time.Duration(c.Config.RetentionDays)*24*time.Hour).After(time.Now()) {
-				analysisJobs = append(analysisJobs, map[string]string{"companyId": id, "accountId": request.CreatedBy, "requestId": request.ID})
-			}
-		}
-	}
-	writeJSON(w, 200, map[string]any{"jobs": jobs, "analysisJobs": analysisJobs, "knowledgeJobs": knowledgeJobs})
+	writeJSON(w, 200, jobs)
 }

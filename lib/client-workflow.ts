@@ -10,9 +10,9 @@ import { governanceStatements, governanceView } from "./workflow-governance";
 import { ensureWorkflowKnowledgeSchema, readKnowledgeFetchMetadata } from "./workflow-knowledge-store";
 import { actionSchema } from "./workflow-validation";
 import { readCompanyActivity } from "./workflow-activity";
-import { iterateCompanyRequests, readCompanyRequests, readCompanySummaries, readRequestDetail, readRequestInbox, requireReadableCompany } from "./workflow-queries";
+import { readCompanyRequests, readCompanySummaries, readRequestDetail, readRequestInbox } from "./workflow-queries";
 import { normalizeWorkspaceQuery, type WorkspaceQuery } from "./workflow-query-types";
-import { ownedCompany, ownedRequest, parseCompany } from "./workflow-command-repository";
+import { ownedRequest, parseCompany } from "./workflow-command-repository";
 import { executeWorkflowCommand } from "./workflow-commands";
 export { ClientWorkflowError } from "./workflow-errors";
 
@@ -32,6 +32,11 @@ export function ensureClientWorkflowSchema() {
       "CREATE INDEX IF NOT EXISTS workflow_requests_company_status ON workflow_requests (company_id, status)",
       "CREATE INDEX IF NOT EXISTS workflow_requests_company_updated_id ON workflow_requests (company_id, updated_at DESC, id DESC)",
       "CREATE INDEX IF NOT EXISTS workflow_requests_company_id ON workflow_requests (company_id, id)",
+      "CREATE TABLE IF NOT EXISTS workflow_export_snapshots (id TEXT PRIMARY KEY NOT NULL, company_id TEXT NOT NULL, created_at TEXT NOT NULL, expires_at TEXT NOT NULL)",
+      "CREATE INDEX IF NOT EXISTS workflow_export_snapshots_company_expiry ON workflow_export_snapshots (company_id, expires_at)",
+      "CREATE TABLE IF NOT EXISTS workflow_export_snapshot_items (snapshot_id TEXT NOT NULL, request_id TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY (snapshot_id, request_id))",
+      "CREATE TABLE IF NOT EXISTS workflow_object_deletions (object_key TEXT PRIMARY KEY NOT NULL, attempts INTEGER NOT NULL DEFAULT 0, available_at TEXT NOT NULL, created_at TEXT NOT NULL, last_error TEXT)",
+      "CREATE INDEX IF NOT EXISTS workflow_object_deletions_due ON workflow_object_deletions (available_at, created_at)",
       ...governanceStatements,
     ];
     try {
@@ -84,16 +89,7 @@ export async function getWorkspace(
   };
 }
 
-export async function completeCompanyEvaluation(actorId: string, companyId: string) {
-  await requireReadableCompany(actorId, companyId);
-  const company = await ownedCompany(actorId, companyId);
-  return (await readCompanyActivity(companyId, company.config)).evaluation;
-}
-
-export async function* completeCompanyRecords(actorId: string, companyId: string) {
-  await requireReadableCompany(actorId, companyId);
-  yield* iterateCompanyRequests(companyId);
-}
+export { completeCompanyEvaluation, createCompanyRecordsExport } from "./workflow-export-snapshots";
 
 export async function applyAction(
   actorId: string,

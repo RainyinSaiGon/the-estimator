@@ -1,13 +1,13 @@
-import { applyAction, completeCompanyEvaluation, completeCompanyRecords, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
+import { applyAction, completeCompanyEvaluation, createCompanyRecordsExport, ClientWorkflowError, ensureClientWorkflowSchema, getWorkspace, requestFile, responseError } from "../../../lib/client-workflow";
 import { env } from "cloudflare:workers";
 import { companyWorkspaceAccess } from "../../../lib/company-workspace-access";
 import { requireCompanyRole } from "../../../lib/workflow-governance";
 import { workflowDb } from "../../../lib/workflow-governance";
-import { requireReadableCompany } from "../../../lib/workflow-queries";
 import { normalizeWorkspaceQuery } from "../../../lib/workflow-query-types";
 import { exportDeliveryRecords } from "../../../lib/workflow-evaluation";
 import { BROWSER_DOCUMENT_UPLOAD_POLICY, DOCUMENT_EXTRACTION_LIMITS, documentExtension, isSupportedDocumentFormat } from "../../../lib/document-extraction-policy";
 import type { ExtractedDocumentUpload } from "../../../lib/document-extraction-policy";
+import { activateR2ObjectCleanup, drainR2ObjectCleanup, stageR2ObjectCleanup } from "../../../lib/r2-object-cleanup";
 
 export const dynamic = "force-dynamic";
 
@@ -54,18 +54,17 @@ export async function GET(request: Request) {
     if (view === "evaluation" || view === "export") {
       if (!companyId) throw new ClientWorkflowError("Choose a company workspace.", 400);
       if (view === "evaluation") return Response.json(await completeCompanyEvaluation(user.userId, companyId), { headers: { "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-evaluation.json" } });
-      await requireReadableCompany(user.userId, companyId);
-      const records = completeCompanyRecords(user.userId, companyId);
+      const snapshot = await createCompanyRecordsExport(user.userId, companyId);
       const encoder = new TextEncoder();
       const stream = new ReadableStream<Uint8Array>({
         async pull(controller) {
           try {
-            const next = await records.next();
-            if (next.done) { controller.close(); return; }
+            const next = await snapshot.records.next();
+            if (next.done) { await snapshot.close(); controller.close(); return; }
             controller.enqueue(encoder.encode(JSON.stringify(exportDeliveryRecords([next.value])[0]) + "\n"));
-          } catch (error) { controller.error(error); }
+          } catch (error) { await snapshot.close().catch(() => undefined); controller.error(error); }
         },
-        async cancel() { await records.return(undefined); },
+        async cancel() { await snapshot.close(); },
       });
       return new Response(stream, { headers: { "Content-Type": "application/x-ndjson", "Cache-Control": "private, no-store", "Content-Disposition": "attachment; filename=delivery-records.jsonl" } });
     }
@@ -121,8 +120,9 @@ export async function POST(request: Request) {
         if (hash !== details.sha256) throw new ClientWorkflowError(`${safeName}: file changed after extraction. Select it again.`);
         const id = crypto.randomUUID();
         const objectKey = `request-files/${encodeURIComponent(owned.company.ownerId)}/${parsed.companyId}/${requestId}/${id}`;
-        await bucket.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: owned.company.ownerId, companyId: parsed.companyId, requestId, fileId: id, sha256: hash } });
+        await stageR2ObjectCleanup(objectKey);
         storedKeys.push(objectKey);
+        await bucket.put(objectKey, bytes, { httpMetadata: { contentType: "application/octet-stream" }, customMetadata: { ownerId: owned.company.ownerId, companyId: parsed.companyId, requestId, fileId: id, sha256: hash } });
         attachments.push({ ...details, name: safeName, id, objectKey });
       }
       body = { ...parsed, requestId, uploadVerified: true, attachments };
@@ -140,7 +140,10 @@ export async function POST(request: Request) {
   } catch (error) {
     // Keep originals if the record committed but analysis or response loading failed.
     const persisted = uploadedRequestId ? await workflowDb().prepare("SELECT id FROM workflow_requests WHERE id = ?").bind(uploadedRequestId).first().catch(() => true) : false;
-    if (!persisted && bucket && storedKeys.length) await bucket.delete(storedKeys).catch(() => undefined);
+    if (!persisted && bucket && storedKeys.length) {
+      await activateR2ObjectCleanup(storedKeys).catch(() => undefined);
+      await drainR2ObjectCleanup(storedKeys.length).catch(() => undefined);
+    }
     return responseError(error);
   }
 }

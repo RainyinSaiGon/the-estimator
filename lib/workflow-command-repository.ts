@@ -224,23 +224,36 @@ export async function createRequestRecord(
         )
         .bind(companyId, inbound.submissionId, inbound.payloadDigest, request.id, at),
     );
+  const objectKeys = [...new Set(request.attachments.map((file) => file.objectKey).filter((key): key is string => Boolean(key)))];
+  if (objectKeys.length)
+    statements.push(workflowDb().prepare(`DELETE FROM workflow_object_deletions WHERE object_key IN (${objectKeys.map(() => "?").join(",")})`).bind(...objectKeys));
   await workflowDb().batch(statements);
 }
 
-export async function deleteRequestRecord(requestId: string, ownerId: string, companyId: string, expectedVersion: number) {
-  const db = getDb();
-  const deleted = await db
-    .delete(workflowRequests)
-    .where(
-      and(
-        eq(workflowRequests.id, requestId),
-        eq(workflowRequests.ownerId, ownerId),
-        eq(workflowRequests.companyId, companyId),
-        eq(workflowRequests.version, expectedVersion),
-      ),
-    )
-    .returning({ id: workflowRequests.id });
-  if (!deleted.length)
+export async function deleteRequestRecord(
+  requestId: string,
+  ownerId: string,
+  companyId: string,
+  expectedVersion: number,
+  actorId: string,
+  at: string,
+  objectKeys: string[],
+) {
+  const db = workflowDb();
+  const statements = [
+    db.prepare(`DELETE FROM workflow_requests WHERE id = ? AND owner_id = ? AND company_id = ? AND version = ?`)
+      .bind(requestId, ownerId, companyId, expectedVersion),
+    db.prepare(`INSERT INTO workflow_audit (id, company_id, request_id, actor, action, created_at)
+      SELECT ?, ?, ?, ?, 'request.deleted', ? WHERE changes() = 1`)
+      .bind(crypto.randomUUID(), companyId, requestId, actorId, at),
+    ...[...new Set(objectKeys)].map((key) => db.prepare(`
+      INSERT INTO workflow_object_deletions (object_key, attempts, available_at, created_at)
+      SELECT ?, 0, ?, ? WHERE changes() = 1
+      ON CONFLICT(object_key) DO UPDATE SET available_at = MIN(workflow_object_deletions.available_at, excluded.available_at)
+    `).bind(key, at, at)),
+  ];
+  const results = await db.batch(statements);
+  if (results[0].meta.changes !== 1)
     throw new ClientWorkflowError("This request changed while deleting. Refresh and retry.", 409);
 }
 
